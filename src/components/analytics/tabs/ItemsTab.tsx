@@ -7,10 +7,11 @@ import CategoryView from './items-views/CategoryView';
 import RateView from './items-views/RateView';
 import AdditionalCostsView from './items-views/AdditionalCostsView';
 import CustomView from './items-views/CustomView';
+import ItemSourceView from './items-views/ItemSourceView';
 import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
 
-export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'custom';
+export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'item-source' | 'custom';
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
@@ -50,6 +51,7 @@ export default function ItemsTab({
     { id: 'category' as ItemViewType, label: 'Category View', icon: '📑' },
     { id: 'rate' as ItemViewType, label: 'Rate View', icon: '📊' },
     { id: 'additional-costs' as ItemViewType, label: 'Additional Costs', icon: '💸' },
+    { id: 'item-source' as ItemViewType, label: 'Item Source', icon: '🔄' },
     { id: 'custom' as ItemViewType, label: 'Custom View', icon: '⚙️' }
   ];
 
@@ -125,6 +127,14 @@ export default function ItemsTab({
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
+          />
+        )}
+        {selectedView === 'item-source' && (
+          <ItemSourceView
+            data={data}
+            totalQuoteValue={totalQuoteValue}
+            navigationContext={navigationContext}
+            navigateToTab={navigateToTab}
           />
         )}
         {selectedView === 'custom' && (

@@ -14,6 +14,7 @@ export interface NavigationContext {
   selectedVendor?: string;
   selectedCategory?: string;
   selectedAdditionalCost?: string;
+  selectedSource?: string;
 }
 
 interface QuoteAnalyticsDashboardProps {

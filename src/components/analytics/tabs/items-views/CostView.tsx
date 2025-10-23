@@ -18,6 +18,32 @@ interface CostViewProps {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
+type SourceType = 'Event' | 'Project' | 'Quote';
+
+const STAGE_COLORS: Record<SourceType, string> = {
+  'Event': '#8b5cf6',
+  'Project': '#3b82f6',
+  'Quote': '#10b981'
+};
+
+// Mock function to determine item source (matches ItemSourceView logic)
+const getItemSource = (itemCode: string): SourceType => {
+  // Use itemCode to deterministically generate source
+  const hash = itemCode.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const rand = (hash % 100) / 100;
+
+  if (rand < 0.7) {
+    // 70% from full pipeline (Project → Event → Quote)
+    return 'Project';
+  } else if (rand < 0.9) {
+    // 20% from Event → Quote (no Project)
+    return 'Event';
+  } else {
+    // 10% added directly in Quote
+    return 'Quote';
+  }
+};
+
 // Mock function to calculate item additional costs (same logic as in AdditionalCostsView)
 const getItemAdditionalCosts = (itemCode: string, itemCost: number, quantity: number) => {
   const costs = [];
@@ -537,6 +563,7 @@ export default function CostView({ data, totalQuoteValue, totalItems, navigation
                   <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300 text-xs">Category</th>
                   <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300 text-xs">Vendor</th>
                   <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300 text-xs">BOM</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-700 border-r border-gray-300 text-xs">Source</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300 text-xs">Quantity</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300 text-xs">Rate</th>
                   <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300 text-xs">Additional Cost</th>
@@ -595,6 +622,23 @@ export default function CostView({ data, totalQuoteValue, totalItems, navigation
                       </button>
                     </td>
 
+                    {/* Source - Clickable */}
+                    <td className="px-3 py-2 text-center border-r border-gray-200 group cursor-pointer" title="Click to view source details in Item Source View">
+                      <button
+                        onClick={() => {
+                          if (setSelectedView) {
+                            setSelectedView('item-source');
+                            const itemSource = getItemSource(item.itemCode);
+                            navigateToTab('items', { selectedSource: itemSource, selectedItem: item.itemCode });
+                          }
+                        }}
+                        className="inline-block px-2 py-1 rounded text-xs font-medium text-white transition-colors"
+                        style={{ backgroundColor: STAGE_COLORS[getItemSource(item.itemCode)] }}
+                      >
+                        {getItemSource(item.itemCode)}
+                      </button>
+                    </td>
+
                     <td className="px-3 py-2 text-right text-gray-700 border-r border-gray-200 text-xs">
                       {item.quantity} {item.unit}
                     </td>
@@ -647,7 +691,7 @@ export default function CostView({ data, totalQuoteValue, totalItems, navigation
           </div>
 
           <div className="bg-gray-50 px-4 py-2 border-t border-gray-300 text-xs text-gray-600">
-            <span className="font-medium">Note:</span> Click on Category, Vendor, BOM, Rate, or Additional Cost values to navigate to respective views.
+            <span className="font-medium">Note:</span> Click on Category, Vendor, BOM, Source, Rate, or Additional Cost values to navigate to respective views.
           </div>
         </CardContent>
       </Card>
