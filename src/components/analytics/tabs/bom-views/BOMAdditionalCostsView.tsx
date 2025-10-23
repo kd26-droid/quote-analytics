@@ -1,0 +1,918 @@
+import { useState, useMemo, useEffect } from 'react';
+import { Card, CardContent } from '../../../ui/card';
+import { Badge } from '../../../ui/badge';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import type { AdditionalCostsBreakdown, BOMCostComparison, TopItemsAnalytics } from '../../../../types/quote.types';
+import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
+
+interface BOMAdditionalCostsViewProps {
+  additionalCosts: AdditionalCostsBreakdown;
+  bomCostComparison: BOMCostComparison[];
+  totalQuoteValue: number;
+  data: TopItemsAnalytics;
+  navigationContext?: NavigationContext;
+  navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+}
+
+interface BOMNode {
+  path: string;
+  code: string;
+  name: string;
+  level: number;
+  items: typeof data.overall[0][];
+  children: BOMNode[];
+  totalCost: number;
+  itemsSubtotal: number;
+  bomAC: number;
+  parentBomCode: string;
+  detailedCosts: { [key: string]: { quotedAmount: number; calculatedAmount: number; difference: number } };
+}
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+// Mock detailed BOM AC breakdown (in real app, this would come from API)
+const getMockBOMAC = (bomCode: string, totalAC: number) => {
+  const allTypes = [
+    'Assembly Labor',
+    'Quality Inspection',
+    'Packaging',
+    'Testing & Certification',
+    'Welding & Fabrication',
+    'Surface Treatment',
+    'Final Assembly',
+    'Crating & Shipping Prep'
+  ];
+
+  // Different BOMs have different AC types
+  const typesMap: { [key: string]: string[] } = {
+    'A': ['Assembly Labor', 'Quality Inspection', 'Welding & Fabrication', 'Surface Treatment'],
+    'B': ['Assembly Labor', 'Testing & Certification', 'Quality Inspection'],
+    'C': ['Packaging', 'Crating & Shipping Prep', 'Quality Inspection']
+  };
+
+  const types = typesMap[bomCode] || allTypes.slice(0, 3);
+  const costs: { [key: string]: { quotedAmount: number; calculatedAmount: number; difference: number } } = {};
+
+  let remaining = totalAC;
+  types.forEach((type, i) => {
+    const isLast = i === types.length - 1;
+    const amount = isLast ? remaining : Math.floor((remaining / (types.length - i)) * (0.7 + Math.random() * 0.6));
+    remaining -= amount;
+
+    const calculatedAmount = Math.floor(amount * (0.95 + Math.random() * 0.05));
+    costs[type] = {
+      quotedAmount: amount,
+      calculatedAmount: calculatedAmount,
+      difference: amount - calculatedAmount
+    };
+  });
+
+  return costs;
+};
+
+export default function BOMAdditionalCostsView({
+  additionalCosts,
+  bomCostComparison,
+  totalQuoteValue,
+  data,
+  navigationContext,
+  navigateToTab
+}: BOMAdditionalCostsViewProps) {
+  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
+  const [selectedACTypes, setSelectedACTypes] = useState<string[]>(['all']);
+  const [showQuoted, setShowQuoted] = useState(true);
+  const [showCalculated, setShowCalculated] = useState(true);
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
+
+  // Auto-select BOM from navigation context
+  useEffect(() => {
+    if (navigationContext?.selectedBOM) {
+      // Use the full BOM path (e.g., "A.1.1" for sub-sub-BOM)
+      setSelectedBOMs([navigationContext.selectedBOM]);
+      setFiltersExpanded(true); // Expand filters to show what's selected
+    }
+  }, [navigationContext]);
+
+  // Helper function to toggle multi-select
+  const toggleSelection = (current: string[], value: string) => {
+    if (value === 'all') return ['all'];
+    let newSelection = current.filter(v => v !== 'all');
+    if (newSelection.includes(value)) {
+      newSelection = newSelection.filter(v => v !== value);
+      if (newSelection.length === 0) return ['all'];
+    } else {
+      newSelection.push(value);
+    }
+    return newSelection;
+  };
+
+  // Build hierarchical BOM tree with AC details
+  const bomTree = useMemo(() => {
+    const tree: BOMNode[] = [];
+    const nodeMap = new Map<string, BOMNode>();
+
+    // Create all nodes from items
+    data.overall.forEach(item => {
+      const parts = item.bomPath.split('.');
+      let currentPath = '';
+
+      parts.forEach((part, level) => {
+        currentPath = currentPath ? `${currentPath}.${part}` : part;
+
+        if (!nodeMap.has(currentPath)) {
+          const parentBomCode = parts[0];
+          const bomData = bomCostComparison.find(b => b.bomCode === parentBomCode);
+
+          // Determine name based on level
+          let nodeName = '';
+          if (level === 0) {
+            nodeName = bomData?.bomName || `BOM ${part}`;
+          } else if (level === 1) {
+            nodeName = `Sub-BOM ${currentPath}`;
+          } else if (level === 2) {
+            nodeName = `Sub-Sub-BOM ${currentPath}`;
+          } else {
+            const subPrefix = 'Sub-'.repeat(level);
+            nodeName = `${subPrefix}BOM ${currentPath}`;
+          }
+
+          const node: BOMNode = {
+            path: currentPath,
+            code: part,
+            name: nodeName,
+            level,
+            items: [],
+            children: [],
+            totalCost: 0,
+            itemsSubtotal: 0,
+            bomAC: 0,
+            parentBomCode,
+            detailedCosts: {}
+          };
+
+          nodeMap.set(currentPath, node);
+
+          if (level === 0) {
+            tree.push(node);
+          } else {
+            const parentPath = parts.slice(0, level).join('.');
+            const parent = nodeMap.get(parentPath);
+            if (parent && !parent.children.find(c => c.path === currentPath)) {
+              parent.children.push(node);
+            }
+          }
+        }
+
+        if (level === parts.length - 1) {
+          const node = nodeMap.get(currentPath);
+          if (node) {
+            node.items.push(item);
+          }
+        }
+      });
+    });
+
+    // Calculate costs bottom-up (children first, then aggregate up)
+    const calculateCosts = (node: BOMNode): void => {
+      // First calculate children recursively
+      node.children.forEach(calculateCosts);
+
+      // Calculate items subtotal - aggregates from direct items + all children
+      const directItemsSubtotal = node.items.reduce((sum, item) => sum + item.totalCost, 0);
+      const childrenItemsSubtotal = node.children.reduce((sum, child) => sum + child.itemsSubtotal, 0);
+      node.itemsSubtotal = directItemsSubtotal + childrenItemsSubtotal;
+
+      // Calculate BOM AC - each level has its own AC, plus aggregates children's AC
+      let ownBomAC = 0;
+
+      if (node.level === 0) {
+        // Parent BOM - get actual AC from comparison data
+        const bomData = bomCostComparison.find(b => b.bomCode === node.code);
+        ownBomAC = bomData?.bomAdditionalCosts || 0;
+        // Get detailed costs for main BOM
+        node.detailedCosts = getMockBOMAC(node.code, ownBomAC);
+      } else {
+        // Sub-BOM or Sub-Sub-BOM - generate mock AC (in real app, comes from API)
+        if (directItemsSubtotal > 0) {
+          const acPercentage = 0.02 + Math.random() * 0.04;
+          ownBomAC = Math.floor(directItemsSubtotal * acPercentage);
+          // Generate detailed costs for sub-BOMs
+          node.detailedCosts = getMockBOMAC(node.parentBomCode, ownBomAC);
+        }
+      }
+
+      // Aggregate BOM AC = own AC + all children's aggregate AC
+      const childrenBomAC = node.children.reduce((sum, child) => sum + child.bomAC, 0);
+      node.bomAC = ownBomAC + childrenBomAC;
+
+      // Total cost = items subtotal + aggregate BOM AC
+      node.totalCost = node.itemsSubtotal + node.bomAC;
+    };
+
+    tree.forEach(calculateCosts);
+    tree.sort((a, b) => b.totalCost - a.totalCost);
+
+    return tree;
+  }, [data.overall, bomCostComparison]);
+
+  // Get BOM AC breakdown with detailed costs (now using tree)
+  const bomACDetails = useMemo(() => {
+    const flattenTree = (nodes: BOMNode[]): BOMNode[] => {
+      const result: BOMNode[] = [];
+      nodes.forEach(node => {
+        result.push(node);
+        if (node.children.length > 0) {
+          result.push(...flattenTree(node.children));
+        }
+      });
+      return result;
+    };
+
+    return flattenTree(bomTree).map(node => ({
+      bomCode: node.path,
+      bomName: node.name,
+      itemsSubtotal: node.itemsSubtotal,
+      bomAdditionalCosts: node.bomAC,
+      bomTotalWithAC: node.totalCost,
+      percentOfQuote: (node.totalCost / totalQuoteValue) * 100,
+      detailedCosts: node.detailedCosts,
+      acImpact: ((node.bomAC / node.itemsSubtotal) * 100).toFixed(1),
+      level: node.level,
+      parentBomCode: node.parentBomCode
+    }));
+  }, [bomTree, totalQuoteValue]);
+
+  // Get all unique AC types across all BOMs
+  const allACTypes = useMemo(() => {
+    const types = new Set<string>();
+    bomACDetails.forEach(bom => {
+      Object.keys(bom.detailedCosts).forEach(type => types.add(type));
+    });
+    return Array.from(types).sort();
+  }, [bomACDetails]);
+
+  // Filter BOMs
+  const filteredBOMs = useMemo(() => {
+    let boms = bomACDetails;
+
+    if (!selectedBOMs.includes('all')) {
+      boms = boms.filter(bom =>
+        selectedBOMs.some(selected => bom.bomCode.startsWith(selected))
+      );
+    }
+
+    // Filter by AC types - only show BOMs that have the selected AC types
+    if (!selectedACTypes.includes('all')) {
+      boms = boms.filter(bom =>
+        selectedACTypes.some(type => bom.detailedCosts[type])
+      );
+    }
+
+    return boms;
+  }, [bomACDetails, selectedBOMs, selectedACTypes]);
+
+  // Calculate insights based on filtered data
+  const insights = useMemo(() => {
+    let totalQuoted = 0;
+    let totalCalculated = 0;
+
+    filteredBOMs.forEach(bom => {
+      Object.entries(bom.detailedCosts).forEach(([type, data]) => {
+        // Only include selected AC types
+        if (selectedACTypes.includes('all') || selectedACTypes.includes(type)) {
+          totalQuoted += data.quotedAmount;
+          totalCalculated += data.calculatedAmount;
+        }
+      });
+    });
+
+    const totalDifference = totalQuoted - totalCalculated;
+    const avgImpact = filteredBOMs.length > 0
+      ? filteredBOMs.reduce((sum, bom) => sum + parseFloat(bom.acImpact), 0) / filteredBOMs.length
+      : 0;
+
+    const highestImpact = filteredBOMs.reduce((max, bom) => {
+      const impact = parseFloat(bom.acImpact);
+      return impact > (max?.impact || 0) ? { bom: bom.bomCode, impact } : max;
+    }, null as { bom: string; impact: number } | null);
+
+    return {
+      totalQuoted,
+      totalCalculated,
+      totalDifference,
+      differencePercent: totalQuoted > 0 ? ((totalDifference / totalQuoted) * 100).toFixed(1) : '0',
+      avgImpact: avgImpact.toFixed(1),
+      highestImpact,
+      bomCount: filteredBOMs.length
+    };
+  }, [filteredBOMs, selectedACTypes]);
+
+  // AC Type Summary - aggregated across filtered BOMs
+  const acTypeSummary = useMemo(() => {
+    const summary = new Map<string, { quoted: number; calculated: number; count: number }>();
+
+    filteredBOMs.forEach(bom => {
+      Object.entries(bom.detailedCosts).forEach(([type, data]) => {
+        if (selectedACTypes.includes('all') || selectedACTypes.includes(type)) {
+          const existing = summary.get(type) || { quoted: 0, calculated: 0, count: 0 };
+          summary.set(type, {
+            quoted: existing.quoted + data.quotedAmount,
+            calculated: existing.calculated + data.calculatedAmount,
+            count: existing.count + 1
+          });
+        }
+      });
+    });
+
+    return Array.from(summary.entries())
+      .map(([name, data]) => ({
+        costName: name,
+        quoted: data.quoted,
+        calculated: data.calculated,
+        difference: data.quoted - data.calculated,
+        count: data.count,
+        percentOfTotal: insights.totalCalculated > 0 ? ((data.calculated / insights.totalCalculated) * 100).toFixed(1) : '0'
+      }))
+      .sort((a, b) => b.calculated - a.calculated);
+  }, [filteredBOMs, selectedACTypes, insights.totalCalculated]);
+
+  // Chart data for BOMs
+  const chartData = useMemo(() => {
+    return filteredBOMs.map(bom => {
+      let quoted = 0;
+      let calculated = 0;
+
+      Object.entries(bom.detailedCosts).forEach(([type, data]) => {
+        if (selectedACTypes.includes('all') || selectedACTypes.includes(type)) {
+          quoted += data.quotedAmount;
+          calculated += data.calculatedAmount;
+        }
+      });
+
+      return {
+        name: `BOM ${bom.bomCode}`,
+        bomCode: bom.bomCode,
+        quoted,
+        calculated: calculated,
+        difference: quoted - calculated,
+        impact: bom.acImpact
+      };
+    });
+  }, [filteredBOMs, selectedACTypes]);
+
+  return (
+    <div className="space-y-4">
+      {/* Multi-Select Filters */}
+      <Card className="border-gray-200">
+        <CardContent className="p-3">
+          <div className="space-y-3">
+            {/* Quick Stats */}
+            <div className="flex items-center gap-4 text-xs">
+              <span className="font-semibold text-gray-700">
+                Filters: {selectedACTypes.includes('all') ? 'All AC Types' : `${selectedACTypes.length} AC Types`},
+                {selectedBOMs.includes('all') ? ' All BOMs' : ` ${selectedBOMs.length} BOMs`}
+              </span>
+
+              <div className="flex items-center gap-2 px-3 py-1 bg-blue-50 rounded border border-blue-200">
+                <span className="text-xs font-semibold text-blue-900">Show:</span>
+                <label className="flex items-center gap-1 cursor-pointer text-xs">
+                  <input
+                    type="checkbox"
+                    checked={showQuoted}
+                    onChange={(e) => setShowQuoted(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>Quoted</span>
+                </label>
+                <label className="flex items-center gap-1 cursor-pointer text-xs">
+                  <input
+                    type="checkbox"
+                    checked={showCalculated}
+                    onChange={(e) => setShowCalculated(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>Calculated</span>
+                </label>
+              </div>
+
+              <button
+                onClick={() => setFiltersExpanded(!filtersExpanded)}
+                className="ml-auto px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors"
+              >
+                {filtersExpanded ? '▲ Less' : '▼ More Filters'}
+              </button>
+
+              {(!selectedACTypes.includes('all') || !selectedBOMs.includes('all')) && (
+                <button
+                  onClick={() => {
+                    setSelectedACTypes(['all']);
+                    setSelectedBOMs(['all']);
+                  }}
+                  className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
+                >
+                  Reset All
+                </button>
+              )}
+            </div>
+
+            {/* Expanded Filters */}
+            {filtersExpanded && (
+              <div className="pt-3 border-t grid grid-cols-2 gap-4">
+                {/* AC Types */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-gray-700 mb-2">AC Types:</div>
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedACTypes.includes('all')}
+                        onChange={() => setSelectedACTypes(['all'])}
+                        className="rounded"
+                      />
+                      <span className="font-medium">All</span>
+                    </label>
+                    {allACTypes.map(type => (
+                      <label key={type} className="flex items-center gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={selectedACTypes.includes(type)}
+                          onChange={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
+                          className="rounded"
+                        />
+                        <span className="text-gray-700">{type}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* BOMs */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-gray-700 mb-2">BOMs:</div>
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedBOMs.includes('all')}
+                        onChange={() => setSelectedBOMs(['all'])}
+                        className="rounded"
+                      />
+                      <span className="font-medium">All</span>
+                    </label>
+                    {(() => {
+                      const allPaths: string[] = [];
+                      const collectPaths = (node: BOMNode) => {
+                        allPaths.push(node.path);
+                        node.children.forEach(collectPaths);
+                      };
+                      bomTree.forEach(collectPaths);
+                      return allPaths.sort().map(path => (
+                        <label key={path} className="flex items-center gap-2 cursor-pointer text-xs">
+                          <input
+                            type="checkbox"
+                            checked={selectedBOMs.includes(path)}
+                            onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, path))}
+                            className="rounded"
+                          />
+                          <span className="text-gray-700">{path}</span>
+                        </label>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Actionable Summary Cards */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Total BOM AC */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <div className="text-xs font-semibold text-gray-600 mb-1">Total BOM AC</div>
+            <div className="text-2xl font-bold text-blue-600">${insights.totalCalculated.toLocaleString()}</div>
+            <div className="text-xs text-gray-500 mt-1">
+              Across {insights.bomCount} BOM{insights.bomCount > 1 ? 's' : ''}
+            </div>
+            <div className="text-xs text-gray-400">
+              {((insights.totalCalculated / totalQuoteValue) * 100).toFixed(1)}% of quote
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* BOM with Highest AC - Clickable */}
+        <Card
+          className="border-gray-200 hover:border-blue-400 transition-all cursor-pointer hover:shadow-md"
+          onClick={() => {
+            // Find BOM with highest AC amount
+            const bomWithHighestAC = filteredBOMs.reduce((max, bom) => {
+              const bomAC = Object.values(bom.detailedCosts).reduce((sum, d) => sum + d.calculatedAmount, 0);
+              const maxAC = Object.values(max.detailedCosts).reduce((sum, d) => sum + d.calculatedAmount, 0);
+              return bomAC > maxAC ? bom : max;
+            }, filteredBOMs[0]);
+            if (bomWithHighestAC) {
+              setSelectedBOMs([bomWithHighestAC.bomCode]);
+            }
+          }}
+          title="Click to filter this BOM"
+        >
+          <CardContent className="p-4">
+            <div className="text-xs font-semibold text-gray-600 mb-1">BOM with Highest AC</div>
+            {filteredBOMs.length > 0 ? (
+              <>
+                {(() => {
+                  const bomWithHighestAC = filteredBOMs.reduce((max, bom) => {
+                    const bomAC = Object.values(bom.detailedCosts).reduce((sum, d) => sum + d.calculatedAmount, 0);
+                    const maxAC = Object.values(max.detailedCosts).reduce((sum, d) => sum + d.calculatedAmount, 0);
+                    return bomAC > maxAC ? bom : max;
+                  }, filteredBOMs[0]);
+                  const totalAC = Object.values(bomWithHighestAC.detailedCosts).reduce((sum, d) => sum + d.calculatedAmount, 0);
+                  return (
+                    <>
+                      <div className="text-2xl font-bold text-gray-900">BOM {bomWithHighestAC.bomCode}</div>
+                      <div className="text-lg font-semibold text-gray-900 mt-1">
+                        ${totalAC.toLocaleString()}
+                      </div>
+                      <div className="text-xs text-blue-600 mt-1 font-medium">
+                        Click to filter →
+                      </div>
+                    </>
+                  );
+                })()}
+              </>
+            ) : (
+              <div className="text-sm text-gray-500">No data</div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Highest AC Type - Clickable */}
+        <Card
+          className="border-gray-200 hover:border-purple-400 transition-all cursor-pointer hover:shadow-md"
+          onClick={() => {
+            if (acTypeSummary.length > 0) {
+              setSelectedACTypes([acTypeSummary[0].costName]);
+            }
+          }}
+          title="Click to filter this AC type"
+        >
+          <CardContent className="p-4">
+            <div className="text-xs font-semibold text-gray-600 mb-1">Highest AC Type</div>
+            {acTypeSummary.length > 0 ? (
+              <>
+                <div className="text-xl font-bold text-purple-600">{acTypeSummary[0].costName}</div>
+                <div className="text-lg font-semibold text-gray-900 mt-1">
+                  ${acTypeSummary[0].calculated.toLocaleString()}
+                </div>
+                <div className="text-xs text-blue-600 mt-1 font-medium">
+                  Click to filter →
+                </div>
+              </>
+            ) : (
+              <div className="text-sm text-gray-500">No data</div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Dynamic Charts - Similar to Items AC View */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* Left Chart - Dynamic based on selection */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <h4 className="font-semibold text-gray-900 mb-3 text-sm">
+              {selectedACTypes.includes('all')
+                ? 'AC Cost Breakdown by Type'
+                : `${selectedACTypes.join(', ')} - BOM Breakdown`}
+            </h4>
+            <ResponsiveContainer width="100%" height={200}>
+              {selectedACTypes.includes('all') || selectedACTypes.length > 1 ? (
+                // Show all AC types in pie chart
+                <PieChart>
+                  <Pie
+                    data={acTypeSummary}
+                    cx="50%"
+                    cy="50%"
+                    labelLine={false}
+                    label={(entry) => `${entry.costName.split(' ')[0]}: $${(entry.calculated / 1000).toFixed(0)}k`}
+                    outerRadius={70}
+                    fill="#8884d8"
+                    dataKey="calculated"
+                  >
+                    {acTypeSummary.map((_entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value: number, _name: string, props: any) => {
+                      return [
+                        `$${value.toLocaleString()} in ${props.payload.costName} - ${props.payload.percentOfTotal}% of total AC`,
+                        props.payload.costName
+                      ];
+                    }}
+                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                  />
+                </PieChart>
+              ) : (
+                // Show BOMs for selected AC type in horizontal bar chart
+                <BarChart
+                  data={chartData.filter(d => d.calculated > 0)}
+                  layout="vertical"
+                  barSize={30}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
+                  <YAxis dataKey="name" type="category" width={70} tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value: number) => [`$${value.toLocaleString()}`, 'Calculated Amount']}
+                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                  />
+                  <Bar dataKey="calculated" fill="#f97316" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Right Chart - Quoted vs Agreed or BOM Comparison */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <h4 className="font-semibold text-gray-900 mb-3 text-sm">
+              {selectedACTypes.includes('all')
+                ? 'BOM AC Comparison'
+                : 'Quoted vs Calculated Comparison'}
+            </h4>
+            <ResponsiveContainer width="100%" height={200}>
+              {selectedACTypes.includes('all') || selectedACTypes.length > 1 ? (
+                // Show BOM comparison in horizontal bar chart
+                <BarChart data={chartData} layout="vertical" barSize={30}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
+                  <YAxis dataKey="name" type="category" width={70} tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    formatter={(value: number, name: string) => {
+                      if (name === 'calculated') return [`$${value.toLocaleString()}`, 'Calculated AC'];
+                      return [value, name];
+                    }}
+                    labelFormatter={(label, payload) => {
+                      if (payload && payload.length > 0) {
+                        return `${label} (${payload[0].payload.impact}% impact)`;
+                      }
+                      return label;
+                    }}
+                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                  />
+                  <Bar dataKey="calculated" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              ) : (
+                // Show quoted vs calculated comparison for specific AC type
+                <BarChart data={chartData.filter(d => d.quoted > 0 || d.calculated > 0)} barSize={40}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
+                  <Tooltip
+                    formatter={(value: number, name: string) => {
+                      if (name === 'quoted') return [`$${value.toLocaleString()}`, 'Quoted'];
+                      if (name === 'calculated') return [`$${value.toLocaleString()}`, 'Calculated'];
+                      return [value, name];
+                    }}
+                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                  />
+                  {showQuoted && <Bar dataKey="quoted" fill="#94a3b8" radius={[4, 4, 0, 0]} />}
+                  {showCalculated && <Bar dataKey="calculated" fill="#3b82f6" radius={[4, 4, 0, 0]} />}
+                </BarChart>
+              )}
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Detailed Table with Clickable AC Columns */}
+      <Card className="border-gray-300 shadow-sm">
+        <CardContent className="p-0">
+          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300">
+            <h4 className="font-semibold text-gray-900 text-sm">BOM Additional Costs - Detailed Breakdown</h4>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead>
+                <tr className="bg-gray-100 border-b-2 border-gray-400">
+                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">BOM</th>
+                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">Name</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">Items Cost</th>
+                  {/* When both are selected, show separate Quoted and Calculated columns for each AC type */}
+                  {showQuoted && showCalculated ? (
+                    <>
+                      {allACTypes.map(type => (
+                        <>
+                          <th key={`${type}-quoted`} className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
+                            {type} (Q)
+                          </th>
+                          <th key={`${type}-calculated`} className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
+                            {type} (C)
+                          </th>
+                        </>
+                      ))}
+                    </>
+                  ) : (
+                    <>
+                      {allACTypes.map(type => (
+                        <th key={type} className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
+                          {type}
+                        </th>
+                      ))}
+                    </>
+                  )}
+                  <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">Total AC</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">BOM Total</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-700">AC Impact %</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white">
+                {filteredBOMs.map((bom, idx) => {
+                  // Calculate totals based on what's shown
+                  const totalQuoted = Object.values(bom.detailedCosts).reduce((sum, data) => sum + data.quotedAmount, 0);
+                  const totalCalculated = Object.values(bom.detailedCosts).reduce((sum, data) => sum + data.calculatedAmount, 0);
+
+                  return (
+                    <tr key={bom.bomCode} className="border-b border-gray-200 hover:bg-gray-50">
+                      <td className="px-3 py-2 border-r border-gray-200">
+                        <span className="font-mono text-gray-900 font-medium">
+                          {bom.bomCode}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-xs truncate" title={bom.bomName}>
+                        {bom.bomName}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-900 border-r border-gray-200">
+                        ${bom.itemsSubtotal.toLocaleString()}
+                      </td>
+
+                      {/* Dynamic AC Type Columns - Clickable */}
+                      {showQuoted && showCalculated ? (
+                        <>
+                          {/* When both selected, show separate Quoted and Calculated columns */}
+                          {allACTypes.map(type => {
+                            const quotedCost = bom.detailedCosts[type]?.quotedAmount || 0;
+                            const calculatedCost = bom.detailedCosts[type]?.calculatedAmount || 0;
+
+                            return (
+                              <>
+                                {/* Quoted Column */}
+                                <td
+                                  key={`${type}-quoted`}
+                                  className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
+                                  title={`Click to toggle ${type} filter`}
+                                >
+                                  {quotedCost > 0 ? (
+                                    <button
+                                      onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
+                                      className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
+                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all')
+                                          ? 'text-gray-900 underline'
+                                          : 'text-gray-700'
+                                      }`}
+                                    >
+                                      ${quotedCost.toLocaleString()}
+                                    </button>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </td>
+                                {/* Calculated Column */}
+                                <td
+                                  key={`${type}-calculated`}
+                                  className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
+                                  title={`Click to toggle ${type} filter`}
+                                >
+                                  {calculatedCost > 0 ? (
+                                    <button
+                                      onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
+                                      className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
+                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all')
+                                          ? 'text-gray-900 underline'
+                                          : 'text-gray-700'
+                                      }`}
+                                    >
+                                      ${calculatedCost.toLocaleString()}
+                                    </button>
+                                  ) : (
+                                    <span className="text-gray-400">-</span>
+                                  )}
+                                </td>
+                              </>
+                            );
+                          })}
+                        </>
+                      ) : (
+                        <>
+                          {/* When only one selected, show single column */}
+                          {allACTypes.map(type => {
+                            const quotedCost = bom.detailedCosts[type]?.quotedAmount || 0;
+                            const calculatedCost = bom.detailedCosts[type]?.calculatedAmount || 0;
+                            const displayCost = showQuoted ? quotedCost : calculatedCost;
+
+                            return (
+                              <td
+                                key={type}
+                                className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
+                                title={`Click to toggle ${type} filter`}
+                              >
+                                {displayCost > 0 ? (
+                                  <button
+                                    onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
+                                    className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
+                                      selectedACTypes.includes(type) && !selectedACTypes.includes('all')
+                                        ? 'text-gray-900 underline'
+                                        : 'text-gray-700'
+                                    }`}
+                                  >
+                                    ${displayCost.toLocaleString()}
+                                  </button>
+                                ) : (
+                                  <span className="text-gray-400">-</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </>
+                      )}
+
+                      <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200">
+                        ${(showQuoted && showCalculated ? totalCalculated : showQuoted ? totalQuoted : showCalculated ? totalCalculated : 0).toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200">
+                        ${bom.bomTotalWithAC.toLocaleString()}
+                      </td>
+                      <td className="px-3 py-2 text-right font-semibold text-gray-900">
+                        {bom.acImpact}%
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+              <tfoot className="bg-gray-100 border-t-2 border-gray-400">
+                <tr>
+                  <td colSpan={3} className="px-3 py-2 font-bold text-gray-900">TOTAL</td>
+                  {showQuoted && showCalculated ? (
+                    <>
+                      {/* When both selected, show separate columns */}
+                      {allACTypes.map(type => {
+                        const quotedTotal = acTypeSummary.find(ac => ac.costName === type)?.quoted || 0;
+                        const calculatedTotal = acTypeSummary.find(ac => ac.costName === type)?.calculated || 0;
+                        return (
+                          <>
+                            <td key={`${type}-quoted`} className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                              {quotedTotal > 0 ? `$${quotedTotal.toLocaleString()}` : '-'}
+                            </td>
+                            <td key={`${type}-calculated`} className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                              {calculatedTotal > 0 ? `$${calculatedTotal.toLocaleString()}` : '-'}
+                            </td>
+                          </>
+                        );
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      {/* When only one selected, show single column */}
+                      {allACTypes.map(type => {
+                        const quotedTotal = acTypeSummary.find(ac => ac.costName === type)?.quoted || 0;
+                        const calculatedTotal = acTypeSummary.find(ac => ac.costName === type)?.calculated || 0;
+                        const displayTotal = showQuoted ? quotedTotal : calculatedTotal;
+                        return (
+                          <td key={type} className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                            {displayTotal > 0 ? `$${displayTotal.toLocaleString()}` : '-'}
+                          </td>
+                        );
+                      })}
+                    </>
+                  )}
+                  <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                    ${(showQuoted && showCalculated ? insights.totalCalculated : showQuoted ? insights.totalQuoted : showCalculated ? insights.totalCalculated : 0).toLocaleString()}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                    -
+                  </td>
+                  <td className="px-3 py-2 text-right font-bold text-gray-900">
+                    {insights.avgImpact}%
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+          <div className="bg-gray-50 px-4 py-2 border-t border-gray-300 text-xs text-gray-600">
+            <span className="font-medium">Note:</span> Click on any AC amount to toggle that cost type filter. AC Impact % = (Total AC / Items Cost) × 100%.
+            {!selectedACTypes.includes('all') && (
+              <button onClick={() => setSelectedACTypes(['all'])} className="text-blue-700 hover:underline font-medium ml-2">
+                ← Show All AC Types
+              </button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+    </div>
+  );
+}
