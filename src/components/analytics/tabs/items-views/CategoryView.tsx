@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { Badge } from '../../../ui/badge';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { TopItemsAnalytics, Category } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 
@@ -394,6 +394,7 @@ export default function CategoryView({ data, totalQuoteValue, topCategories, nav
                       });
                       const totalCost = filteredItems.reduce((s, i) => s + i.totalCost, 0) || 1;
                       return Array.from(vendorMap.entries()).map(([vendor, cost]) => ({
+                        name: vendor.split(' ')[0],
                         vendor,
                         cost,
                         percent: (cost / totalCost) * 100
@@ -401,11 +402,6 @@ export default function CategoryView({ data, totalQuoteValue, topCategories, nav
                     })()}
                     cx="50%"
                     cy="50%"
-                    labelLine={false}
-                    label={(entry) => {
-                      if (!entry || !entry.vendor) return '';
-                      return `${entry.vendor.split(' ')[0]}: ${entry.percent?.toFixed(1) || 0}%`;
-                    }}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="cost"
@@ -420,6 +416,12 @@ export default function CategoryView({ data, totalQuoteValue, topCategories, nav
                       ));
                     })()}
                   </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry: any) => `${value} (${entry.payload.percent?.toFixed(1) || 0}%)`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
                   <Tooltip
                     formatter={(value: number, _name: string, props: any) => [
                       `$${value.toLocaleString()} - ${props.payload.percent?.toFixed(1) || 0}% of category total`,
@@ -432,22 +434,30 @@ export default function CategoryView({ data, totalQuoteValue, topCategories, nav
                 // Show all categories
                 <PieChart>
                   <Pie
-                    data={chartCategoryData.slice(0, 6)}
+                    data={chartCategoryData.slice(0, 6).map(c => ({
+                      name: c.category.split(' ')[0],
+                      category: c.category,
+                      totalCost: c.totalCost,
+                      percentOfQuote: c.percentOfQuote,
+                      items: c.items,
+                      avgCostPerItem: c.avgCostPerItem
+                    }))}
                     cx="50%"
                     cy="50%"
-                    labelLine={false}
-                    label={(entry) => {
-                      if (!entry || !entry.category) return '';
-                      return `${entry.category.split(' ')[0]}: ${entry.percentOfQuote?.toFixed(0) || 0}%`;
-                    }}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="totalCost"
                   >
-                    {chartCategoryData.map((_entry, index) => (
+                    {chartCategoryData.slice(0, 6).map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry: any) => `${value} (${entry.payload.percentOfQuote?.toFixed(0) || 0}%)`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
                   <Tooltip
                     formatter={(value: number, _name: string, props: any) => [
                       `$${value.toLocaleString()} - ${props.payload.percentOfQuote.toFixed(1)}% of quote - ${props.payload.items} items - Average $${props.payload.avgCostPerItem.toLocaleString()} per item`,

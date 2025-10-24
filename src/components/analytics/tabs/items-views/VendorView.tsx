@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { Badge } from '../../../ui/badge';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { TopItemsAnalytics, Vendor } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 
@@ -476,27 +476,38 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
                         categoryMap.set(cat, (categoryMap.get(cat) || 0) + item.totalCost);
                       });
                       return Array.from(categoryMap.entries()).map(([category, cost]) => ({
-                        category,
+                        name: category,
                         cost,
                         percent: (cost / filteredItems.reduce((s, i) => s + i.totalCost, 0)) * 100
                       }));
                     })()}
                     cx="50%"
                     cy="50%"
-                    labelLine={false}
-                    label={(entry) => `${entry.category}: ${entry.percent.toFixed(1)}%`}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="cost"
                   >
-                    {filteredItems.map((_entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
+                    {(() => {
+                      const categoryMap = new Map<string, number>();
+                      filteredItems.forEach(item => {
+                        const cat = item.category || 'Uncategorized';
+                        categoryMap.set(cat, (categoryMap.get(cat) || 0) + item.totalCost);
+                      });
+                      return Array.from(categoryMap.entries()).map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ));
+                    })()}
                   </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry: any) => `${value} (${entry.payload.percent.toFixed(1)}%)`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
                   <Tooltip
                     formatter={(value: number, _name: string, props: any) => [
                       `$${value.toLocaleString()} - ${props.payload.percent.toFixed(1)}% of vendor total`,
-                      props.payload.category
+                      props.payload.name
                     ]}
                     contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
                   />
@@ -505,22 +516,29 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
                 // Show all vendors
                 <PieChart>
                   <Pie
-                    data={chartVendorData.slice(0, 6)}
+                    data={chartVendorData.slice(0, 6).map(v => ({
+                      name: v.vendor.split(' ')[0],
+                      totalCost: v.totalCost,
+                      percentOfQuote: v.percentOfQuote,
+                      vendor: v.vendor,
+                      items: v.items
+                    }))}
                     cx="50%"
                     cy="50%"
-                    labelLine={false}
-                    label={(entry) => {
-                      if (!entry || !entry.vendor) return '';
-                      return `${entry.vendor.split(' ')[0]}: ${entry.percentOfQuote.toFixed(1)}%`;
-                    }}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="totalCost"
                   >
-                    {chartVendorData.map((_entry, index) => (
+                    {chartVendorData.slice(0, 6).map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry: any) => `${value} (${entry.payload.percentOfQuote.toFixed(1)}%)`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
                   <Tooltip
                     formatter={(value: number, _name: string, props: any) => [
                       `$${value.toLocaleString()} - ${props.payload.percentOfQuote.toFixed(1)}% of total quote cost - ${props.payload.items} items`,

@@ -48,7 +48,7 @@ export default function QuoteAnalyticsDashboard({
   };
 
   const tabs = [
-    { id: 'summary' as TabType, label: 'Summary', icon: '📊' },
+    // { id: 'summary' as TabType, label: 'Summary', icon: '📊' },
     { id: 'items' as TabType, label: 'Items', icon: '📦' },
     { id: 'bom' as TabType, label: 'BOM', icon: '🔧' },
     { id: 'overall' as TabType, label: 'Overall', icon: '🎯' }
@@ -78,7 +78,7 @@ export default function QuoteAnalyticsDashboard({
 
       {/* Tab Content */}
       <div className="min-h-[600px]">
-        {activeTab === 'summary' && (
+        {/* {activeTab === 'summary' && (
           <SummaryTab
             data={data}
             totalQuoteValue={totalQuoteValue}
@@ -88,7 +88,7 @@ export default function QuoteAnalyticsDashboard({
             bomCostComparison={bomCostComparison}
             navigateToTab={navigateToTab}
           />
-        )}
+        )} */}
         {activeTab === 'items' && (
           <ItemsTab
             data={data}
