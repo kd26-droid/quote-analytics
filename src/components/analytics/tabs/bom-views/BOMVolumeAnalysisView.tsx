@@ -391,24 +391,39 @@ export default function BOMVolumeAnalysisView({
     return Array.from(levels).sort((a, b) => a - b);
   }, [allSubBOMsFlattened]);
 
-  // Chart data - recalculate to match actual displayed costs and filter by selected volumes
+  // Chart data - recalculate to match actual displayed costs and filter by selected volumes and level
   const chartData = useMemo(() => {
     if (!selectedBOMData) return [];
 
     return selectedBOMData.instances
       .filter(inst => selectedVolumes.includes(inst.bomQuantity))
       .map(instance => {
-        const itemsPerUnit = instance.itemsSubtotal / instance.bomQuantity;
-        const bomACPerUnit = instance.additionalCostsBreakdown.reduce((sum, ac) => sum + ac.perUnit, 0);
+        let itemsPerUnit = 0;
+        let bomACPerUnit = 0;
+
+        if (selectedLevel === 'all' || selectedLevel === 'main') {
+          // Show main BOM costs (includes all sub-BOMs)
+          itemsPerUnit = instance.itemsSubtotal / instance.bomQuantity;
+          bomACPerUnit = instance.additionalCostsBreakdown.reduce((sum, ac) => sum + ac.perUnit, 0);
+        } else if (selectedLevel.startsWith('level-')) {
+          // Show only specific level costs
+          const levelNum = parseInt(selectedLevel.replace('level-', ''));
+          const subBOMsAtLevel = flattenSubBOMs(instance.subBOMs).filter(sub => sub.level === levelNum);
+
+          if (subBOMsAtLevel.length > 0) {
+            itemsPerUnit = subBOMsAtLevel.reduce((sum, sub) => sum + (sub.itemsSubtotal / instance.bomQuantity), 0);
+            bomACPerUnit = subBOMsAtLevel.reduce((sum, sub) => sum + (sub.bomAC / instance.bomQuantity), 0);
+          }
+        }
 
         return {
           name: `${instance.bomQuantity} units`,
           itemsSubtotal: itemsPerUnit,
           bomAC: bomACPerUnit,
-          total: instance.perUnitCost
+          total: itemsPerUnit + bomACPerUnit
         };
       });
-  }, [selectedBOMData, selectedVolumes]);
+  }, [selectedBOMData, selectedVolumes, selectedLevel]);
 
   if (volumeScenarios.size === 0) {
     return (
