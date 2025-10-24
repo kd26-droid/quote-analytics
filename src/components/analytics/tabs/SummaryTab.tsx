@@ -31,14 +31,14 @@ export default function SummaryTab({
   // Helper function to calculate item-level additional costs
   const getItemAdditionalCosts = (itemCode: string, itemCost: number) => {
     const random = itemCode.charCodeAt(0) % 5;
-    let totalAC = 0;
+    let totalAdditionalCost = 0;
 
-    if (random >= 1) totalAC += Math.floor(itemCost * 0.02); // MOQ
-    if (random >= 2) totalAC += Math.floor(itemCost * 0.03); // Markup
-    if (random >= 3) totalAC += Math.floor(itemCost * 0.015); // Tax
-    if (random === 4) totalAC += Math.floor(itemCost * 0.01); // Shipping
+    if (random >= 1) totalAdditionalCost += Math.floor(itemCost * 0.02); // MOQ
+    if (random >= 2) totalAdditionalCost += Math.floor(itemCost * 0.03); // Markup
+    if (random >= 3) totalAdditionalCost += Math.floor(itemCost * 0.015); // Tax
+    if (random === 4) totalAdditionalCost += Math.floor(itemCost * 0.01); // Shipping
 
-    return totalAC;
+    return totalAdditionalCost;
   };
 
   // Top 10 items
@@ -81,7 +81,7 @@ export default function SummaryTab({
       name: bom.bomName,
       quantity: bom.bomQuantity,
       itemsSubtotal: bom.itemsSubtotal,
-      bomAC: bom.bomAdditionalCosts,
+      bomAdditionalCost: bom.bomAdditionalCosts,
       total: bom.bomTotalWithAC,
       percent: bom.percentOfQuote
     }));
@@ -420,8 +420,8 @@ export default function SummaryTab({
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-700">BOM Name</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Qty</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Items Subtotal</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">BOM AC</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total (with AC)</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">BOM Additional Cost</th>
+                  <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">Total (with Additional Cost)</th>
                   <th className="px-3 py-2 text-right text-xs font-semibold text-gray-700">% of Quote</th>
                 </tr>
               </thead>
@@ -436,7 +436,7 @@ export default function SummaryTab({
                     <td className="px-3 py-2.5 text-gray-700">{bom.name}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{bom.quantity || '-'}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">${bom.itemsSubtotal.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right text-gray-700">${bom.bomAC.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">${bom.bomAdditionalCost.toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right font-bold text-gray-900">${bom.total.toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{bom.percent.toFixed(2)}%</td>
                   </tr>
@@ -449,7 +449,7 @@ export default function SummaryTab({
                     ${bomBreakdown.reduce((sum, bom) => sum + bom.itemsSubtotal, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${bomBreakdown.reduce((sum, bom) => sum + bom.bomAC, 0).toLocaleString()}
+                    ${bomBreakdown.reduce((sum, bom) => sum + bom.bomAdditionalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
                     ${bomBreakdown.reduce((sum, bom) => sum + bom.total, 0).toLocaleString()}
@@ -477,7 +477,7 @@ export default function SummaryTab({
           </div>
 
           <div className="space-y-6">
-            {/* Item Level AC */}
+            {/* Item Level Additional Costs */}
             <div className="border-l-4 border-blue-500 pl-4">
               <div className="flex justify-between items-start mb-3">
                 <div>
@@ -506,7 +506,7 @@ export default function SummaryTab({
               </div>
             </div>
 
-            {/* BOM Level AC */}
+            {/* BOM Level Additional Costs */}
             <div className="border-l-4 border-purple-500 pl-4">
               <div className="flex justify-between items-start mb-3">
                 <div>
@@ -525,9 +525,9 @@ export default function SummaryTab({
                 </div>
               </div>
               <div className="space-y-2">
-                {bomBreakdown.filter(bom => bom.bomAC > 0).map((bom, idx) => (
+                {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).map((bom, idx) => (
                   <div
-                    key={`bom-ac-${bom.code}-${bom.quantity || 'default'}-${idx}`}
+                    key={`bom-additional-cost-${bom.code}-${bom.quantity || 'default'}-${idx}`}
                     className="bg-gray-50 p-3 rounded flex justify-between items-center hover:bg-blue-50 cursor-pointer"
                     onClick={() => navigateToTab('bom', { selectedBOM: bom.code })}
                   >
@@ -539,15 +539,15 @@ export default function SummaryTab({
                       <div className="text-xs text-gray-600">{bom.name}</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-gray-900">${bom.bomAC.toLocaleString()}</div>
-                      <div className="text-xs text-gray-600">{((bom.bomAC / bom.total) * 100).toFixed(2)}% of BOM total</div>
+                      <div className="font-bold text-gray-900">${bom.bomAdditionalCost.toLocaleString()}</div>
+                      <div className="text-xs text-gray-600">{((bom.bomAdditionalCost / bom.total) * 100).toFixed(2)}% of BOM total</div>
                     </div>
                   </div>
                 ))}
               </div>
             </div>
 
-            {/* Overall Level AC */}
+            {/* Overall Level Additional Costs */}
             <div className="border-l-4 border-pink-500 pl-4">
               <div className="flex justify-between items-start mb-3">
                 <div>
