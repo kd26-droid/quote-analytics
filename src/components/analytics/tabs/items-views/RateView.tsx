@@ -15,6 +15,7 @@ interface RateViewProps {
 
 export default function RateView({ data, vendorRateDeviation, totalQuoteValue, navigationContext }: RateViewProps) {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   // Calculate all 4 rates for each item
   const itemRates = useMemo(() => {
@@ -141,7 +142,22 @@ export default function RateView({ data, vendorRateDeviation, totalQuoteValue, n
       {/* Detailed Rate Table */}
       <Card className="border-gray-200">
         <CardContent className="p-4">
-          <h4 className="font-semibold text-gray-900 mb-3">Complete Rate Breakdown (All Items)</h4>
+          <div className="flex justify-between items-center mb-3">
+            <h4 className="font-semibold text-gray-900">Complete Rate Breakdown</h4>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-600">
+                Showing {showAll ? itemRates.length : Math.min(10, itemRates.length)} of {itemRates.length} items
+              </span>
+              {itemRates.length > 10 && (
+                <button
+                  onClick={() => setShowAll(!showAll)}
+                  className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors font-medium"
+                >
+                  {showAll ? 'Show First 10' : 'Show All Items'}
+                </button>
+              )}
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead className="bg-gray-100 border-b-2 border-gray-300">
@@ -159,7 +175,7 @@ export default function RateView({ data, vendorRateDeviation, totalQuoteValue, n
                 </tr>
               </thead>
               <tbody>
-                {itemRates.map((item) => (
+                {(showAll ? itemRates : itemRates.slice(0, 10)).map((item) => (
                   <tr
                     key={item.itemCode}
                     className="border-t hover:bg-blue-50 transition-colors cursor-pointer"
