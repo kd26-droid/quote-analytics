@@ -536,7 +536,7 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
                   <Legend
                     verticalAlign="bottom"
                     height={36}
-                    formatter={(value, entry: any) => `${value} (${entry.payload.percentOfQuote.toFixed(1)}%)`}
+                    formatter={(value, entry: any) => `${value} (${entry.payload.percentOfQuote?.toFixed(1) || '0'}%)`}
                     wrapperStyle={{ fontSize: '11px' }}
                   />
                   <Tooltip
