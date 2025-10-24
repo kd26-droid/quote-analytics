@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, Fragment } from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { Badge } from '../../../ui/badge';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { AdditionalCostsBreakdown, BOMCostComparison, TopItemsAnalytics } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 
@@ -561,7 +561,7 @@ export default function BOMAdditionalCostsView({
                 // Show all AC types in pie chart
                 <PieChart>
                   <Pie
-                    data={acTypeSummary}
+                    data={acTypeSummary.map(item => ({ ...item, name: item.costName }))}
                     cx="50%"
                     cy="50%"
                     labelLine={false}
@@ -574,10 +574,16 @@ export default function BOMAdditionalCostsView({
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry: any) => `${value} ($${(entry.payload.calculated / 1000).toFixed(0)}k)`}
+                    wrapperStyle={{ fontSize: '11px' }}
+                  />
                   <Tooltip
                     formatter={(value: number, _name: string, props: any) => {
                       return [
-                        `$${value.toLocaleString()} in ${props.payload.costName} - ${props.payload.percentOfTotal}% of total AC`,
+                        `$${value.toLocaleString()} - ${props.payload.percentOfTotal}% of total`,
                         props.payload.costName
                       ];
                     }}
@@ -602,18 +608,6 @@ export default function BOMAdditionalCostsView({
                 </BarChart>
               )}
             </ResponsiveContainer>
-            {(selectedACTypes.includes('all') || selectedACTypes.length > 1) && (
-              <div className="mt-3 flex flex-wrap gap-3 justify-center">
-                {acTypeSummary.map((entry, index) => (
-                  <div key={index} className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
-                    <span className="text-xs text-gray-700 font-medium">
-                      {entry.costName}: ${(entry.calculated / 1000).toFixed(0)}k
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
           </CardContent>
         </Card>
 

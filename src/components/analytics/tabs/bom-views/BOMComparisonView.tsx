@@ -40,6 +40,8 @@ export default function BOMComparisonView({
   setSelectedView
 }: BOMComparisonViewProps) {
   const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
+  const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
   const [sortBy, setSortBy] = useState<'total' | 'ac-burden' | 'item-count' | 'percent'>('total');
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
@@ -163,6 +165,22 @@ export default function BOMComparisonView({
     return Array.from(allPaths).sort();
   }, [bomTree]);
 
+  // Get all categories and vendors from items
+  const { availableCategories, availableVendors } = useMemo(() => {
+    const categories = new Set<string>();
+    const vendors = new Set<string>();
+
+    data.overall.forEach(item => {
+      if (item.category) categories.add(item.category);
+      if (item.vendor) vendors.add(item.vendor);
+    });
+
+    return {
+      availableCategories: Array.from(categories).sort(),
+      availableVendors: Array.from(vendors).sort()
+    };
+  }, [data.overall]);
+
   // Calculate item count per BOM path (aggregated - direct + all children)
   const bomItemCounts = useMemo(() => {
     const counts = new Map<string, number>();
@@ -187,7 +205,32 @@ export default function BOMComparisonView({
 
     // Apply BOM filter
     if (!selectedBOMs.includes('all')) {
-      boms = boms.filter(bom => selectedBOMs.includes(bom.bomCode));
+      boms = boms.filter(bom => {
+        const bomKey = bom.bomQuantity ? `${bom.bomCode}-${bom.bomQuantity}` : bom.bomCode;
+        return selectedBOMs.includes(bomKey) || selectedBOMs.includes(bom.bomCode);
+      });
+    }
+
+    // Apply category filter - filter BOMs by checking if they contain items from selected categories
+    if (!selectedCategories.includes('all')) {
+      boms = boms.filter(bom => {
+        const bomItems = data.overall.filter(item => {
+          const itemBomCode = item.bomPath.split('.')[0];
+          return itemBomCode === bom.bomCode;
+        });
+        return bomItems.some(item => selectedCategories.includes(item.category));
+      });
+    }
+
+    // Apply vendor filter - filter BOMs by checking if they contain items from selected vendors
+    if (!selectedVendors.includes('all')) {
+      boms = boms.filter(bom => {
+        const bomItems = data.overall.filter(item => {
+          const itemBomCode = item.bomPath.split('.')[0];
+          return itemBomCode === bom.bomCode;
+        });
+        return bomItems.some(item => selectedVendors.includes(item.vendor));
+      });
     }
 
     // Sort
@@ -215,7 +258,7 @@ export default function BOMComparisonView({
     }
 
     return boms;
-  }, [bomCostComparison, selectedBOMs, sortBy, bomItemCounts]);
+  }, [bomCostComparison, selectedBOMs, selectedCategories, selectedVendors, sortBy, bomItemCounts, data.overall]);
 
   // Calculate insights
   const insights = useMemo(() => {
@@ -249,15 +292,19 @@ export default function BOMComparisonView({
 
   // Chart data for stacked bar
   const chartData = useMemo(() => {
-    return filteredBOMs.map(bom => ({
-      name: `BOM ${bom.bomCode}`,
-      bomCode: bom.bomCode,
-      itemsCost: bom.itemsSubtotal,
-      bomAC: bom.bomAdditionalCosts,
-      total: bom.bomTotalWithAC,
-      itemCount: bomItemCounts.get(bom.bomCode) || 0,
-      acBurden: ((bom.bomAdditionalCosts / bom.itemsSubtotal) * 100).toFixed(1)
-    }));
+    return filteredBOMs.map(bom => {
+      const displayName = bom.bomQuantity ? `BOM ${bom.bomCode} (${bom.bomQuantity})` : `BOM ${bom.bomCode}`;
+      return {
+        name: displayName,
+        bomCode: bom.bomCode,
+        bomQuantity: bom.bomQuantity,
+        itemsCost: bom.itemsSubtotal,
+        bomAC: bom.bomAdditionalCosts,
+        total: bom.bomTotalWithAC,
+        itemCount: bomItemCounts.get(bom.bomCode) || 0,
+        acBurden: ((bom.bomAdditionalCosts / bom.itemsSubtotal) * 100).toFixed(1)
+      };
+    });
   }, [filteredBOMs, bomItemCounts]);
 
   return (
@@ -270,6 +317,18 @@ export default function BOMComparisonView({
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-gray-600">
                 BOMs: {selectedBOMs.includes('all') ? 'All' : `${selectedBOMs.length} selected`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-600">
+                Categories: {selectedCategories.includes('all') ? 'All' : `${selectedCategories.length} selected`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-gray-600">
+                Vendors: {selectedVendors.includes('all') ? 'All' : `${selectedVendors.length} selected`}
               </span>
             </div>
 
@@ -296,10 +355,12 @@ export default function BOMComparisonView({
               {filtersExpanded ? '▲ Less' : '▼ More Filters'}
             </button>
 
-            {!selectedBOMs.includes('all') && (
+            {(!selectedBOMs.includes('all') || !selectedCategories.includes('all') || !selectedVendors.includes('all')) && (
               <button
                 onClick={() => {
                   setSelectedBOMs(['all']);
+                  setSelectedCategories(['all']);
+                  setSelectedVendors(['all']);
                   setSortBy('total');
                 }}
                 className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
@@ -312,29 +373,86 @@ export default function BOMComparisonView({
           {/* Advanced Filters (Collapsible) - Multi-Select Checkboxes */}
           {filtersExpanded && (
             <div className="mt-3 pt-3 border-t space-y-3">
-              <div className="space-y-2">
-                <div className="text-xs font-bold text-gray-700 mb-2">Filter by BOMs:</div>
-                <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
-                  <label className="flex items-center gap-2 cursor-pointer text-xs">
-                    <input
-                      type="checkbox"
-                      checked={selectedBOMs.includes('all')}
-                      onChange={() => setSelectedBOMs(['all'])}
-                      className="rounded"
-                    />
-                    <span className="font-medium">All</span>
-                  </label>
-                  {availableBOMs.map(bom => (
-                    <label key={bom} className="flex items-center gap-2 cursor-pointer text-xs">
+              <div className="grid grid-cols-3 gap-4">
+                {/* BOM Filter */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-gray-700 mb-2">Filter by BOMs:</div>
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
                       <input
                         type="checkbox"
-                        checked={selectedBOMs.includes(bom)}
-                        onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, bom))}
+                        checked={selectedBOMs.includes('all')}
+                        onChange={() => setSelectedBOMs(['all'])}
                         className="rounded"
                       />
-                      <span className="text-gray-700">{bom}</span>
+                      <span className="font-medium">All</span>
                     </label>
-                  ))}
+                    {availableBOMs.map(bom => (
+                      <label key={bom} className="flex items-center gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={selectedBOMs.includes(bom)}
+                          onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, bom))}
+                          className="rounded"
+                        />
+                        <span className="text-gray-700">{bom}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Category Filter */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-gray-700 mb-2">Filter by Category:</div>
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes('all')}
+                        onChange={() => setSelectedCategories(['all'])}
+                        className="rounded"
+                      />
+                      <span className="font-medium">All</span>
+                    </label>
+                    {availableCategories.map(cat => (
+                      <label key={cat} className="flex items-center gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={selectedCategories.includes(cat)}
+                          onChange={() => setSelectedCategories(toggleSelection(selectedCategories, cat))}
+                          className="rounded"
+                        />
+                        <span className="text-gray-700">{cat}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Vendor Filter */}
+                <div className="space-y-2">
+                  <div className="text-xs font-bold text-gray-700 mb-2">Filter by Vendor:</div>
+                  <div className="max-h-64 overflow-y-auto flex flex-col gap-1">
+                    <label className="flex items-center gap-2 cursor-pointer text-xs">
+                      <input
+                        type="checkbox"
+                        checked={selectedVendors.includes('all')}
+                        onChange={() => setSelectedVendors(['all'])}
+                        className="rounded"
+                      />
+                      <span className="font-medium">All</span>
+                    </label>
+                    {availableVendors.map(vendor => (
+                      <label key={vendor} className="flex items-center gap-2 cursor-pointer text-xs">
+                        <input
+                          type="checkbox"
+                          checked={selectedVendors.includes(vendor)}
+                          onChange={() => setSelectedVendors(toggleSelection(selectedVendors, vendor))}
+                          className="rounded"
+                        />
+                        <span className="text-gray-700">{vendor}</span>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>

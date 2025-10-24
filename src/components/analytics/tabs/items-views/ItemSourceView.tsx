@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import type { TopItemsAnalytics } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 
@@ -292,6 +292,52 @@ export default function ItemSourceView({
     ].filter(d => d.value > 0);
   }, [filteredItems]);
 
+  // Items missing from projects - Mock data showing items in projects but not in quote
+  const missingFromProjects = useMemo(() => {
+    // Mock: Different categories have different missing counts
+    const categories = ['Electronics', 'Mechanical', 'Hardware', 'Software', 'Tooling'];
+    return categories.map(cat => ({
+      category: cat,
+      inProject: Math.floor(Math.random() * 50) + 20,
+      inQuote: Math.floor(Math.random() * 40) + 10,
+      missing: 0
+    })).map(item => ({
+      ...item,
+      missing: item.inProject - item.inQuote
+    }));
+  }, []);
+
+  // Items with no bids - Mock data
+  const noBidsData = useMemo(() => {
+    const presentItems = itemsWithSource.filter(i => i.currentStatus === 'Present');
+    const total = presentItems.length;
+
+    // Mock: 15% have no bids, 70% have bids, 15% have partial bids
+    const noBids = Math.floor(total * 0.15);
+    const hasBids = Math.floor(total * 0.70);
+    const partialBids = total - noBids - hasBids;
+
+    return [
+      { name: 'No Bids Received', value: noBids, color: '#ef4444' },
+      { name: 'All Bids Received', value: hasBids, color: '#10b981' },
+      { name: 'Partial Bids', value: partialBids, color: '#f59e0b' }
+    ];
+  }, [itemsWithSource]);
+
+  // Items with bids but not exported - Mock data by vendor
+  const bidsNotExported = useMemo(() => {
+    const vendors = ['Vendor A', 'Vendor B', 'Vendor C', 'Vendor D', 'Vendor E'];
+    return vendors.map(vendor => ({
+      vendor,
+      totalBids: Math.floor(Math.random() * 40) + 20,
+      exported: Math.floor(Math.random() * 35) + 15,
+      notExported: 0
+    })).map(item => ({
+      ...item,
+      notExported: item.totalBids - item.exported
+    }));
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* Filters */}
@@ -453,8 +499,9 @@ export default function ItemSourceView({
         {/* Funnel Visualization */}
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <h4 className="font-semibold text-gray-900 mb-3 text-sm">Pipeline Funnel: Item Flow Through Stages</h4>
-            <div className="relative" style={{ height: '250px' }}>
+            <h4 className="font-semibold text-gray-900 mb-2 text-sm">Pipeline Funnel</h4>
+            <p className="text-xs text-gray-600 mb-3">Item flow through project stages</p>
+            <div className="relative" style={{ height: '220px' }}>
               {/* Custom Funnel */}
               <div className="flex flex-col justify-between h-full py-2">
                 {waterfallData.map((stage, index) => {
@@ -504,10 +551,15 @@ export default function ItemSourceView({
                 })}
               </div>
             </div>
-            <div className="mt-2 pt-2 border-t border-gray-200 text-xs text-gray-600">
-              <strong>Conversion Rate:</strong> {waterfallData[0]?.remaining > 0
-                ? ((waterfallData[3]?.remaining / waterfallData[0]?.remaining) * 100).toFixed(1)
-                : 0}% of items from Project made it to Quote
+            <div className="mt-2 pt-2 border-t border-gray-200 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-600 font-semibold">Conversion Rate:</span>
+                <span className="font-bold text-green-600">
+                  {waterfallData[0]?.remaining > 0
+                    ? ((waterfallData[3]?.remaining / waterfallData[0]?.remaining) * 100).toFixed(1)
+                    : 0}%
+                </span>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -515,17 +567,17 @@ export default function ItemSourceView({
         {/* Source Distribution */}
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <h4 className="font-semibold text-gray-900 mb-3 text-sm">Items in Quote by Origin Source</h4>
-            <div className="text-xs text-gray-600 mb-2">Where did items in the final quote originate from?</div>
-            <ResponsiveContainer width="100%" height={250}>
+            <h4 className="font-semibold text-gray-900 mb-2 text-sm">Items by Origin Source</h4>
+            <p className="text-xs text-gray-600 mb-3">Where items in the quote originated</p>
+            <ResponsiveContainer width="100%" height={220}>
               <PieChart>
                 <Pie
                   data={sourceDistribution}
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={(entry) => `${entry.name}: ${entry.value}`}
-                  outerRadius={80}
+                  label={(entry) => `${entry.value}`}
+                  outerRadius={70}
                   dataKey="value"
                 >
                   {sourceDistribution.map((entry, index) => (
@@ -537,6 +589,124 @@ export default function ItemSourceView({
                 />
               </PieChart>
             </ResponsiveContainer>
+            <div className="mt-2 flex flex-wrap gap-2 justify-center text-xs">
+              {sourceDistribution.map((entry, index) => (
+                <div key={index} className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }}></div>
+                  <span className="text-gray-700">{entry.name}: <span className="font-semibold">{entry.value}</span></span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Additional Analysis Charts */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Items Missing from Projects */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <h4 className="font-semibold text-gray-900 mb-1 text-sm">Missing from Projects</h4>
+            <p className="text-xs text-gray-600 mb-3">Items not included in quote</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={missingFromProjects} margin={{ top: 10, right: 10, bottom: 60, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="category"
+                  tick={{ fontSize: 10 }}
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
+                />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: 10 }} iconType="square" />
+                <Bar dataKey="inProject" name="In Project" fill="#3b82f6" />
+                <Bar dataKey="inQuote" name="In Quote" fill="#10b981" />
+                <Bar dataKey="missing" name="Missing" fill="#ef4444" />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="mt-2 pt-2 border-t border-gray-200 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Total Missing:</span>
+                <span className="font-bold text-red-600">
+                  {missingFromProjects.reduce((sum, item) => sum + item.missing, 0)} items
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Items with No Bids */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <h4 className="font-semibold text-gray-900 mb-1 text-sm">Bid Status</h4>
+            <p className="text-xs text-gray-600 mb-3">Vendor bid coverage</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={noBidsData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={(entry) => `${entry.value}`}
+                  outerRadius={65}
+                  dataKey="value"
+                >
+                  {noBidsData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-2 flex flex-wrap gap-2 justify-center text-xs">
+              {noBidsData.map((entry, index) => (
+                <div key={index} className="flex items-center gap-1.5">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: entry.color }}></div>
+                  <span className="text-gray-700 truncate">{entry.name.replace(' Received', '')}: <span className="font-semibold">{entry.value}</span></span>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Bids Not Exported */}
+        <Card className="border-gray-200">
+          <CardContent className="p-4">
+            <h4 className="font-semibold text-gray-900 mb-1 text-sm">Bids Not Exported</h4>
+            <p className="text-xs text-gray-600 mb-3">By vendor</p>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={bidsNotExported} margin={{ top: 10, right: 10, bottom: 60, left: 10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="vendor"
+                  tick={{ fontSize: 10 }}
+                  angle={-45}
+                  textAnchor="end"
+                  height={60}
+                />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
+                />
+                <Legend wrapperStyle={{ fontSize: 10 }} iconType="square" />
+                <Bar dataKey="exported" name="Exported" fill="#10b981" />
+                <Bar dataKey="notExported" name="Not Exported" fill="#f59e0b" />
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="mt-2 pt-2 border-t border-gray-200 text-xs">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Total Not Exported:</span>
+                <span className="font-bold text-orange-600">
+                  {bidsNotExported.reduce((sum, item) => sum + item.notExported, 0)} bids
+                </span>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

@@ -570,7 +570,14 @@ export default function BOMVolumeAnalysisView({
           {/* Chart */}
           <Card className="border-gray-200">
             <CardContent className="p-4">
-              <h4 className="font-semibold text-gray-900 mb-3 text-sm">Cost Breakdown by Volume</h4>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-gray-900 text-sm">Cost Breakdown by Volume</h4>
+                <div className="text-xs px-3 py-1.5 bg-blue-100 text-blue-800 rounded font-medium">
+                  {selectedLevel === 'all' && 'Showing: All Levels (Total)'}
+                  {selectedLevel === 'main' && 'Showing: Main BOM Only'}
+                  {selectedLevel.startsWith('level-') && `Showing: Level ${selectedLevel.replace('level-', '')} Sub-BOMs`}
+                </div>
+              </div>
               <ResponsiveContainer width="100%" height={400}>
                 <BarChart data={chartData} margin={{ top: 20, right: 30, bottom: 80, left: 80 }} barGap={8} barCategoryGap="20%">
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -587,6 +594,12 @@ export default function BOMVolumeAnalysisView({
                   <Tooltip
                     contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
                     formatter={(value: number) => `$${value.toFixed(2)}`}
+                    labelFormatter={(label) => {
+                      const levelText = selectedLevel === 'all' ? 'All Levels (Total)' :
+                                       selectedLevel === 'main' ? 'Main BOM Only' :
+                                       `Level ${selectedLevel.replace('level-', '')} Sub-BOMs`;
+                      return `${label} - ${levelText}`;
+                    }}
                   />
                   <Legend
                     wrapperStyle={{ paddingTop: '20px' }}
