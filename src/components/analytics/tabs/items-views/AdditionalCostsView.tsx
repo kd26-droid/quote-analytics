@@ -146,7 +146,7 @@ export default function AdditionalCostsView({ data, totalQuoteValue, navigationC
     // Filter by BOMs (multiple)
     if (!selectedBOMs.includes('all')) {
       items = items.filter(item =>
-        selectedBOMs.some(bom => item.bomPath.startsWith(bom))
+        selectedBOMs.some(bom => item.bomPath === bom || item.bomPath.startsWith(bom + '.'))
       );
     }
 

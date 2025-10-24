@@ -97,6 +97,7 @@ export default function QuoteAnalyticsDashboard({
             topCategories={topCategories}
             topVendors={topVendors}
             vendorRateDeviation={vendorRateDeviation}
+            bomCostComparison={bomCostComparison}
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
           />

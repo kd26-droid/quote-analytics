@@ -19,7 +19,19 @@ export const analyticsData: AnalyticsData = {
       { rank: 12, itemCode: "PACKAGING-CRATE", itemName: "Heavy Duty Wooden Crate", bomPath: "C", quantity: 8, unit: "PCS", quotedRate: 450, totalCost: 3600, percentOfQuote: 0.7, vendor: "Packaging Solutions Ltd", category: "Consumables" },
       { rank: 13, itemCode: "FOAM-PADDING", itemName: "Protective Foam Padding", bomPath: "C", quantity: 50, unit: "SQ.M", quotedRate: 85, totalCost: 4250, percentOfQuote: 0.8, vendor: "Packaging Solutions Ltd", category: "Consumables" },
       { rank: 14, itemCode: "LABEL-SHIPPING", itemName: "Shipping Labels & Documentation Kit", bomPath: "C", quantity: 10, unit: "KIT", quotedRate: 120, totalCost: 1200, percentOfQuote: 0.2, vendor: "Office Supplies Co", category: "Consumables" },
-      { rank: 15, itemCode: "WRAP-SHRINK", itemName: "Industrial Shrink Wrap Roll", bomPath: "C", quantity: 15, unit: "ROLL", quotedRate: 95, totalCost: 1425, percentOfQuote: 0.3, vendor: "Packaging Solutions Ltd", category: "Consumables" }
+      { rank: 15, itemCode: "WRAP-SHRINK", itemName: "Industrial Shrink Wrap Roll", bomPath: "C", quantity: 15, unit: "ROLL", quotedRate: 95, totalCost: 1425, percentOfQuote: 0.3, vendor: "Packaging Solutions Ltd", category: "Consumables" },
+
+      // BOM D - Low Volume (10 units) - for Volume Analysis
+      { rank: 16, itemCode: "CTRL-PANEL-001", itemName: "Industrial Control Panel", bomPath: "D", quantity: 10, unit: "PCS", quotedRate: 1500, totalCost: 15000, percentOfQuote: 2.8, vendor: "Electronics Corp", category: "Electronics" },
+      { rank: 17, itemCode: "SENSOR-TEMP-001", itemName: "Temperature Sensor Module", bomPath: "D.1", quantity: 10, unit: "PCS", quotedRate: 200, totalCost: 2000, percentOfQuote: 0.4, vendor: "Sensor Tech Inc", category: "Electronics" },
+      { rank: 18, itemCode: "RELAY-MODULE", itemName: "Power Relay Module", bomPath: "D.1", quantity: 10, unit: "PCS", quotedRate: 150, totalCost: 1500, percentOfQuote: 0.3, vendor: "Electronics Corp", category: "Electronics" },
+      { rank: 19, itemCode: "CABLE-ASSEMBLY", itemName: "Wiring Cable Assembly", bomPath: "D.2", quantity: 10, unit: "SET", quotedRate: 300, totalCost: 3000, percentOfQuote: 0.6, vendor: "Cable Solutions", category: "Electronics" },
+
+      // BOM D - High Volume (1000 units) - for Volume Analysis
+      { rank: 20, itemCode: "CTRL-PANEL-001", itemName: "Industrial Control Panel", bomPath: "D", quantity: 1000, unit: "PCS", quotedRate: 1380, totalCost: 1380000, percentOfQuote: 260.0, vendor: "Electronics Corp", category: "Electronics" },
+      { rank: 21, itemCode: "SENSOR-TEMP-001", itemName: "Temperature Sensor Module", bomPath: "D.1", quantity: 1000, unit: "PCS", quotedRate: 175, totalCost: 175000, percentOfQuote: 33.0, vendor: "Sensor Tech Inc", category: "Electronics" },
+      { rank: 22, itemCode: "RELAY-MODULE", itemName: "Power Relay Module", bomPath: "D.1", quantity: 1000, unit: "PCS", quotedRate: 138, totalCost: 138000, percentOfQuote: 26.0, vendor: "Electronics Corp", category: "Electronics" },
+      { rank: 23, itemCode: "CABLE-ASSEMBLY", itemName: "Wiring Cable Assembly", bomPath: "D.2", quantity: 1000, unit: "SET", quotedRate: 285, totalCost: 285000, percentOfQuote: 54.0, vendor: "Cable Solutions", category: "Electronics" }
     ],
     insights: {
       top10Total: 148428,
@@ -104,6 +116,24 @@ export const analyticsData: AnalyticsData = {
       bomAdditionalCosts: 4000,
       bomTotalWithAC: 32000,
       percentOfQuote: 6.1
+    },
+    {
+      bomCode: "D",
+      bomName: "Control System - Low Volume (10 units)",
+      itemsSubtotal: 21500,
+      bomAdditionalCosts: 1500,
+      bomTotalWithAC: 23000,
+      percentOfQuote: 4.3,
+      bomQuantity: 10
+    },
+    {
+      bomCode: "D",
+      bomName: "Control System - High Volume (1000 units)",
+      itemsSubtotal: 1978000,
+      bomAdditionalCosts: 120000,
+      bomTotalWithAC: 2098000,
+      percentOfQuote: 396.0,
+      bomQuantity: 1000
     }
   ],
 

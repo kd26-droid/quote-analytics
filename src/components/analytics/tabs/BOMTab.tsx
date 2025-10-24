@@ -1,11 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent } from '../../ui/card';
 import BOMComparisonView from './bom-views/BOMComparisonView';
 import BOMAdditionalCostsView from './bom-views/BOMAdditionalCostsView';
+import BOMVolumeAnalysisView from './bom-views/BOMVolumeAnalysisView';
 import type { TopItemsAnalytics, AdditionalCostsBreakdown, BOMCostComparison } from '../../../types/quote.types';
 import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
 
-export type BOMViewType = 'comparison' | 'additional-costs';
+export type BOMViewType = 'comparison' | 'additional-costs' | 'volume-analysis';
 
 interface BOMTabProps {
   data: TopItemsAnalytics;
@@ -36,9 +37,24 @@ export default function BOMTab({
     }
   }, [navigationContext, selectedView]);
 
+  // Detect if volume analysis should be shown
+  const hasVolumeScenarios = useMemo(() => {
+    const bomCodeCounts = new Map<string, number>();
+    bomCostComparison.forEach(bom => {
+      const count = bomCodeCounts.get(bom.bomCode) || 0;
+      bomCodeCounts.set(bom.bomCode, count + 1);
+    });
+    return Array.from(bomCodeCounts.values()).some(count => count > 1);
+  }, [bomCostComparison]);
+
+  // Conditionally add volume analysis to views
   const views = [
     { id: 'comparison' as BOMViewType, label: 'BOM Comparison', icon: '📊' },
-    { id: 'additional-costs' as BOMViewType, label: 'BOM Additional Costs', icon: '💰' }
+    { id: 'additional-costs' as BOMViewType, label: 'BOM Additional Costs', icon: '💰' },
+    ...(hasVolumeScenarios
+      ? [{ id: 'volume-analysis' as BOMViewType, label: 'Volume Analysis', icon: '📈' }]
+      : []
+    )
   ];
 
   return (
@@ -72,6 +88,7 @@ export default function BOMTab({
       <div>
         {selectedView === 'comparison' && (
           <BOMComparisonView
+            key="comparison"
             bomCostComparison={bomCostComparison}
             totalQuoteValue={totalQuoteValue}
             data={data}
@@ -82,11 +99,20 @@ export default function BOMTab({
         )}
         {selectedView === 'additional-costs' && (
           <BOMAdditionalCostsView
+            key="additional-costs"
             additionalCosts={additionalCosts}
             bomCostComparison={bomCostComparison}
             totalQuoteValue={totalQuoteValue}
             data={data}
             navigationContext={navigationContext}
+            navigateToTab={navigateToTab}
+          />
+        )}
+        {selectedView === 'volume-analysis' && hasVolumeScenarios && (
+          <BOMVolumeAnalysisView
+            bomCostComparison={bomCostComparison}
+            data={data}
+            totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
           />
         )}

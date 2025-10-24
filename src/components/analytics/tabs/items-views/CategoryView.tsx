@@ -59,7 +59,9 @@ export default function CategoryView({ data, totalQuoteValue, topCategories, nav
     let items = data.overall;
 
     if (!selectedBOMs.includes('all')) {
-      items = items.filter(item => selectedBOMs.includes(item.bomPath));
+      items = items.filter(item =>
+        selectedBOMs.some(bom => item.bomPath === bom || item.bomPath.startsWith(bom + '.'))
+      );
     }
 
     if (!selectedVendors.includes('all')) {

@@ -66,123 +66,86 @@ export default function BOMComparisonView({
     return newSelection;
   };
 
-  // Build hierarchical BOM tree
+  // HARDCODED BOM structure with both D entries
   const bomTree = useMemo(() => {
-    const tree: BOMNode[] = [];
-    const nodeMap = new Map<string, BOMNode>();
+    // Instead of building from items, hardcode the structure based on bomCostComparison
+    const tree: BOMNode[] = bomCostComparison.map(bom => {
+      // Create unique key for each BOM entry
+      const bomKey = bom.bomQuantity ? `${bom.bomCode}-${bom.bomQuantity}` : bom.bomCode;
 
-    // Mock BOM quantities (in real app, this comes from API)
-    const bomQuantities: { [key: string]: number } = {
-      'A': 100,
-      'B': 50,
-      'C': 25
-    };
-
-    // Create all nodes from items
-    data.overall.forEach(item => {
-      const parts = item.bomPath.split('.');
-      let currentPath = '';
-
-      parts.forEach((part, level) => {
-        currentPath = currentPath ? `${currentPath}.${part}` : part;
-
-        if (!nodeMap.has(currentPath)) {
-          const parentBomCode = parts[0];
-          const bomData = bomCostComparison.find(b => b.bomCode === parentBomCode);
-
-          // Determine name based on level
-          let nodeName = '';
-          if (level === 0) {
-            nodeName = bomData?.bomName || `BOM ${part}`;
-          } else if (level === 1) {
-            nodeName = `Sub-BOM ${currentPath}`;
-          } else if (level === 2) {
-            nodeName = `Sub-Sub-BOM ${currentPath}`;
-          } else {
-            // Level 3+
-            const subPrefix = 'Sub-'.repeat(level);
-            nodeName = `${subPrefix}BOM ${currentPath}`;
-          }
-
-          // BOM quantity is the same for all levels within a main BOM
-          // Sub-BOMs inherit the quantity from their parent main BOM
-          const bomQty = bomQuantities[parentBomCode] || 1;
-
-          const node: BOMNode = {
-            path: currentPath,
-            code: part,
-            name: nodeName,
-            level,
-            items: [],
-            children: [],
-            totalCost: 0,
-            itemsSubtotal: 0,
-            bomAC: 0,
-            parentBomCode,
-            bomQuantity: bomQty
-          };
-
-          nodeMap.set(currentPath, node);
-
-          if (level === 0) {
-            tree.push(node);
-          } else {
-            const parentPath = parts.slice(0, level).join('.');
-            const parent = nodeMap.get(parentPath);
-            if (parent && !parent.children.find(c => c.path === currentPath)) {
-              parent.children.push(node);
-            }
-          }
+      // Find items belonging to this BOM (matching code AND quantity if applicable)
+      const bomItems = data.overall.filter(item => {
+        const itemBomCode = item.bomPath.split('.')[0];
+        if (itemBomCode !== bom.bomCode) return false;
+        // If this BOM has a specific quantity, match items with that quantity
+        if (bom.bomQuantity) {
+          return item.quantity === bom.bomQuantity;
         }
+        return true;
+      });
 
-        if (level === parts.length - 1) {
-          const node = nodeMap.get(currentPath);
-          if (node) {
-            node.items.push(item);
+      // Build sub-BOM structure
+      const subBOMs = new Map<string, BOMNode>();
+
+      bomItems.forEach(item => {
+        const parts = item.bomPath.split('.');
+        if (parts.length > 1) {
+          // This item belongs to a sub-BOM
+          const subBomPath = parts.slice(0, 2).join('.');
+          if (!subBOMs.has(subBomPath)) {
+            subBOMs.set(subBomPath, {
+              path: `${bomKey}/${subBomPath}`,
+              code: parts[1],
+              name: `Sub-BOM ${subBomPath}`,
+              level: 1,
+              items: [],
+              children: [],
+              totalCost: 0,
+              itemsSubtotal: 0,
+              bomAC: 0,
+              parentBomCode: bom.bomCode,
+              bomQuantity: bom.bomQuantity || 1
+            });
           }
         }
       });
-    });
 
-    // Calculate costs bottom-up (children first, then aggregate up)
-    const calculateCosts = (node: BOMNode): void => {
-      // First calculate children recursively
-      node.children.forEach(calculateCosts);
-
-      // Note: bomQuantity is already set and is the same for all levels in a BOM hierarchy
-      // It represents how many of this BOM assembly we're producing
-
-      // Calculate items subtotal - aggregates from direct items + all children
-      const directItemsSubtotal = node.items.reduce((sum, item) => sum + item.totalCost, 0);
-      const childrenItemsSubtotal = node.children.reduce((sum, child) => sum + child.itemsSubtotal, 0);
-      node.itemsSubtotal = directItemsSubtotal + childrenItemsSubtotal;
-
-      // Calculate BOM AC - each level has its own AC, plus aggregates children's AC
-      let ownBomAC = 0;
-
-      if (node.level === 0) {
-        // Parent BOM - get actual AC from comparison data
-        const bomData = bomCostComparison.find(b => b.bomCode === node.code);
-        ownBomAC = bomData?.bomAdditionalCosts || 0;
-      } else {
-        // Sub-BOM or Sub-Sub-BOM - generate mock AC (in real app, comes from API)
-        // Generate 2-6% of direct items cost as this level's own AC
-        if (directItemsSubtotal > 0) {
-          const acPercentage = 0.02 + Math.random() * 0.04;
-          ownBomAC = Math.floor(directItemsSubtotal * acPercentage);
+      // Assign items to nodes
+      const children = Array.from(subBOMs.values());
+      bomItems.forEach(item => {
+        const parts = item.bomPath.split('.');
+        if (parts.length === 1) {
+          // Direct item of root BOM - we don't track these
+        } else {
+          const subBomPath = parts.slice(0, 2).join('.');
+          const subNode = subBOMs.get(subBomPath);
+          if (subNode) {
+            subNode.items.push(item);
+            subNode.itemsSubtotal += item.totalCost;
+          }
         }
-      }
+      });
 
-      // Aggregate BOM AC = own AC + all children's aggregate AC
-      const childrenBomAC = node.children.reduce((sum, child) => sum + child.bomAC, 0);
-      node.bomAC = ownBomAC + childrenBomAC;
+      // Calculate costs for children
+      children.forEach(child => {
+        child.bomAC = Math.floor(child.itemsSubtotal * 0.03); // Mock 3% AC
+        child.totalCost = child.itemsSubtotal + child.bomAC;
+      });
 
-      // Total cost = items subtotal + aggregate BOM AC
-      node.totalCost = node.itemsSubtotal + node.bomAC;
-    };
-
-    tree.forEach(calculateCosts);
-    tree.sort((a, b) => b.totalCost - a.totalCost);
+      return {
+        path: bomKey,
+        code: bom.bomCode,
+        name: bom.bomName,
+        level: 0,
+        items: bomItems.filter(item => item.bomPath.split('.').length === 1),
+        children,
+        totalCost: bom.bomTotalWithAC,
+        itemsSubtotal: bom.itemsSubtotal,
+        bomAC: bom.bomAdditionalCosts,
+        parentBomCode: bom.bomCode,
+        bomQuantity: bom.bomQuantity || 1
+      };
+    });
 
     return tree;
   }, [data.overall, bomCostComparison]);
@@ -385,7 +348,7 @@ export default function BOMComparisonView({
         <Card className="border-gray-200">
           <CardContent className="p-4">
             <h4 className="font-semibold text-gray-900 mb-3 text-sm">Base BOM Cost</h4>
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={180}>
               <BarChart data={chartData} barSize={60}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis dataKey="name" tick={{ fontSize: 10 }} />
@@ -411,15 +374,15 @@ export default function BOMComparisonView({
         <Card className="border-gray-200">
           <CardContent className="p-4">
             <h4 className="font-semibold text-gray-900 mb-3 text-sm">BOM Total Cost</h4>
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={280}>
               <PieChart>
                 <Pie
                   data={chartData}
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={(entry) => `${entry.name}: $${(entry.total / 1000).toFixed(0)}k`}
-                  outerRadius={70}
+                  label={false}
+                  outerRadius={90}
                   fill="#8884d8"
                   dataKey="total"
                 >
@@ -441,6 +404,16 @@ export default function BOMComparisonView({
                 />
               </PieChart>
             </ResponsiveContainer>
+            <div className="mt-3 flex flex-wrap gap-3 justify-center">
+              {chartData.map((entry, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
+                  <span className="text-xs text-gray-700 font-medium">
+                    {entry.name}: ${(entry.total / 1000).toFixed(0)}k
+                  </span>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -505,7 +478,10 @@ export default function BOMComparisonView({
                               </button>
                             )}
                             <span className="font-mono text-xs text-gray-900 font-medium">
-                              {node.path}
+                              {node.level === 0 ? node.code : node.code}
+                              {node.level === 0 && node.bomQuantity > 1 && (
+                                <span className="text-gray-600 ml-1">({node.bomQuantity.toLocaleString()})</span>
+                              )}
                             </span>
                           </div>
                         </td>

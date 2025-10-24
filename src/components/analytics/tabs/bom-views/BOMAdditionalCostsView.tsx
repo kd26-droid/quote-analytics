@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Fragment } from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { Badge } from '../../../ui/badge';
 import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
@@ -109,109 +109,78 @@ export default function BOMAdditionalCostsView({
 
   // Build hierarchical BOM tree with AC details
   const bomTree = useMemo(() => {
-    const tree: BOMNode[] = [];
-    const nodeMap = new Map<string, BOMNode>();
+    // HARDCODED BOM structure with both D entries (same as BOM Comparison)
+    const tree: BOMNode[] = bomCostComparison.map(bom => {
+      const bomKey = bom.bomQuantity ? `${bom.bomCode}-${bom.bomQuantity}` : bom.bomCode;
 
-    // Create all nodes from items
-    data.overall.forEach(item => {
-      const parts = item.bomPath.split('.');
-      let currentPath = '';
-
-      parts.forEach((part, level) => {
-        currentPath = currentPath ? `${currentPath}.${part}` : part;
-
-        if (!nodeMap.has(currentPath)) {
-          const parentBomCode = parts[0];
-          const bomData = bomCostComparison.find(b => b.bomCode === parentBomCode);
-
-          // Determine name based on level
-          let nodeName = '';
-          if (level === 0) {
-            nodeName = bomData?.bomName || `BOM ${part}`;
-          } else if (level === 1) {
-            nodeName = `Sub-BOM ${currentPath}`;
-          } else if (level === 2) {
-            nodeName = `Sub-Sub-BOM ${currentPath}`;
-          } else {
-            const subPrefix = 'Sub-'.repeat(level);
-            nodeName = `${subPrefix}BOM ${currentPath}`;
-          }
-
-          const node: BOMNode = {
-            path: currentPath,
-            code: part,
-            name: nodeName,
-            level,
-            items: [],
-            children: [],
-            totalCost: 0,
-            itemsSubtotal: 0,
-            bomAC: 0,
-            parentBomCode,
-            detailedCosts: {}
-          };
-
-          nodeMap.set(currentPath, node);
-
-          if (level === 0) {
-            tree.push(node);
-          } else {
-            const parentPath = parts.slice(0, level).join('.');
-            const parent = nodeMap.get(parentPath);
-            if (parent && !parent.children.find(c => c.path === currentPath)) {
-              parent.children.push(node);
-            }
-          }
+      const bomItems = data.overall.filter(item => {
+        const itemBomCode = item.bomPath.split('.')[0];
+        if (itemBomCode !== bom.bomCode) return false;
+        if (bom.bomQuantity) {
+          return item.quantity === bom.bomQuantity;
         }
+        return true;
+      });
 
-        if (level === parts.length - 1) {
-          const node = nodeMap.get(currentPath);
-          if (node) {
-            node.items.push(item);
+      const subBOMs = new Map<string, BOMNode>();
+
+      bomItems.forEach(item => {
+        const parts = item.bomPath.split('.');
+        if (parts.length > 1) {
+          const subBomPath = parts.slice(0, 2).join('.');
+          if (!subBOMs.has(subBomPath)) {
+            subBOMs.set(subBomPath, {
+              path: `${bomKey}/${subBomPath}`,
+              code: parts[1],
+              name: `Sub-BOM ${subBomPath}`,
+              level: 1,
+              items: [],
+              children: [],
+              totalCost: 0,
+              itemsSubtotal: 0,
+              bomAC: 0,
+              parentBomCode: bom.bomCode,
+              detailedCosts: {}
+            });
           }
         }
       });
-    });
 
-    // Calculate costs bottom-up (children first, then aggregate up)
-    const calculateCosts = (node: BOMNode): void => {
-      // First calculate children recursively
-      node.children.forEach(calculateCosts);
-
-      // Calculate items subtotal - aggregates from direct items + all children
-      const directItemsSubtotal = node.items.reduce((sum, item) => sum + item.totalCost, 0);
-      const childrenItemsSubtotal = node.children.reduce((sum, child) => sum + child.itemsSubtotal, 0);
-      node.itemsSubtotal = directItemsSubtotal + childrenItemsSubtotal;
-
-      // Calculate BOM AC - each level has its own AC, plus aggregates children's AC
-      let ownBomAC = 0;
-
-      if (node.level === 0) {
-        // Parent BOM - get actual AC from comparison data
-        const bomData = bomCostComparison.find(b => b.bomCode === node.code);
-        ownBomAC = bomData?.bomAdditionalCosts || 0;
-        // Get detailed costs for main BOM
-        node.detailedCosts = getMockBOMAC(node.code, ownBomAC);
-      } else {
-        // Sub-BOM or Sub-Sub-BOM - generate mock AC (in real app, comes from API)
-        if (directItemsSubtotal > 0) {
-          const acPercentage = 0.02 + Math.random() * 0.04;
-          ownBomAC = Math.floor(directItemsSubtotal * acPercentage);
-          // Generate detailed costs for sub-BOMs
-          node.detailedCosts = getMockBOMAC(node.parentBomCode, ownBomAC);
+      const children = Array.from(subBOMs.values());
+      bomItems.forEach(item => {
+        const parts = item.bomPath.split('.');
+        if (parts.length === 1) {
+          // Direct item
+        } else {
+          const subBomPath = parts.slice(0, 2).join('.');
+          const subNode = subBOMs.get(subBomPath);
+          if (subNode) {
+            subNode.items.push(item);
+            subNode.itemsSubtotal += item.totalCost;
+          }
         }
-      }
+      });
 
-      // Aggregate BOM AC = own AC + all children's aggregate AC
-      const childrenBomAC = node.children.reduce((sum, child) => sum + child.bomAC, 0);
-      node.bomAC = ownBomAC + childrenBomAC;
+      children.forEach(child => {
+        child.bomAC = Math.floor(child.itemsSubtotal * 0.03);
+        child.totalCost = child.itemsSubtotal + child.bomAC;
+        child.detailedCosts = getMockBOMAC(bom.bomCode, child.bomAC);
+      });
 
-      // Total cost = items subtotal + aggregate BOM AC
-      node.totalCost = node.itemsSubtotal + node.bomAC;
-    };
-
-    tree.forEach(calculateCosts);
-    tree.sort((a, b) => b.totalCost - a.totalCost);
+      return {
+        path: bomKey,
+        code: bom.bomCode,
+        name: bom.bomName,
+        level: 0,
+        items: bomItems.filter(item => item.bomPath.split('.').length === 1),
+        children,
+        totalCost: bom.bomTotalWithAC,
+        itemsSubtotal: bom.itemsSubtotal,
+        bomAC: bom.bomAdditionalCosts,
+        parentBomCode: bom.bomCode,
+        detailedCosts: getMockBOMAC(bom.bomCode, bom.bomAdditionalCosts)
+      };
+    });
 
     return tree;
   }, [data.overall, bomCostComparison]);
@@ -587,7 +556,7 @@ export default function BOMAdditionalCostsView({
                 ? 'AC Cost Breakdown by Type'
                 : `${selectedACTypes.join(', ')} - BOM Breakdown`}
             </h4>
-            <ResponsiveContainer width="100%" height={200}>
+            <ResponsiveContainer width="100%" height={280}>
               {selectedACTypes.includes('all') || selectedACTypes.length > 1 ? (
                 // Show all AC types in pie chart
                 <PieChart>
@@ -596,8 +565,8 @@ export default function BOMAdditionalCostsView({
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={(entry) => `${entry.costName.split(' ')[0]}: $${(entry.calculated / 1000).toFixed(0)}k`}
-                    outerRadius={70}
+                    label={false}
+                    outerRadius={80}
                     fill="#8884d8"
                     dataKey="calculated"
                   >
@@ -633,6 +602,18 @@ export default function BOMAdditionalCostsView({
                 </BarChart>
               )}
             </ResponsiveContainer>
+            {(selectedACTypes.includes('all') || selectedACTypes.length > 1) && (
+              <div className="mt-3 flex flex-wrap gap-3 justify-center">
+                {acTypeSummary.map((entry, index) => (
+                  <div key={index} className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }}></div>
+                    <span className="text-xs text-gray-700 font-medium">
+                      {entry.costName}: ${(entry.calculated / 1000).toFixed(0)}k
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -706,14 +687,14 @@ export default function BOMAdditionalCostsView({
                   {showQuoted && showCalculated ? (
                     <>
                       {allACTypes.map(type => (
-                        <>
-                          <th key={`${type}-quoted`} className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
+                        <Fragment key={type}>
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
                             {type} (Q)
                           </th>
-                          <th key={`${type}-calculated`} className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
+                          <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">
                             {type} (C)
                           </th>
-                        </>
+                        </Fragment>
                       ))}
                     </>
                   ) : (
@@ -731,109 +712,114 @@ export default function BOMAdditionalCostsView({
                 </tr>
               </thead>
               <tbody className="bg-white">
-                {filteredBOMs.map((bom, idx) => {
-                  // Calculate totals based on what's shown
-                  const totalQuoted = Object.values(bom.detailedCosts).reduce((sum, data) => sum + data.quotedAmount, 0);
-                  const totalCalculated = Object.values(bom.detailedCosts).reduce((sum, data) => sum + data.calculatedAmount, 0);
+                {(() => {
+                  const renderBOMNode = (node: any, level: number = 0): JSX.Element[] => {
+                    const isExpanded = expandedBOMs.has(node.path);
+                    const hasChildren = node.children && node.children.length > 0;
+                    const indent = level * 24;
 
-                  return (
-                    <tr key={bom.bomCode} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="px-3 py-2 border-r border-gray-200">
-                        <span className="font-mono text-gray-900 font-medium">
-                          {bom.bomCode}
-                        </span>
+                  // Find matching BOM from comparison
+                  const bom = bomCostComparison.find(b =>
+                    b.bomCode === node.code &&
+                    (!b.bomQuantity || b.bomQuantity === node.bomQuantity)
+                  ) || { detailedCosts: {}, itemsSubtotal: node.itemsSubtotal, bomTotalWithAC: node.totalCost, acImpact: 0 };
+
+                  const totalQuoted = Object.values(node.detailedCosts || {}).reduce((sum: number, data: any) => sum + (data.quotedAmount || 0), 0);
+                  const totalCalculated = Object.values(node.detailedCosts || {}).reduce((sum: number, data: any) => sum + (data.calculatedAmount || 0), 0);
+                  const acImpact = node.itemsSubtotal > 0 ? ((node.bomAC / node.itemsSubtotal) * 100).toFixed(1) : '0.0';
+
+                  const rows: JSX.Element[] = [
+                    <tr key={node.path} className={`border-b border-gray-200 hover:bg-gray-50 ${level > 0 ? 'bg-gray-50' : ''}`}>
+                      <td className="px-3 py-2 border-r border-gray-200" style={{ paddingLeft: `${indent + 12}px` }}>
+                        <div className="flex items-center gap-2">
+                          {hasChildren && (
+                            <button
+                              onClick={() => {
+                                const newExpanded = new Set(expandedBOMs);
+                                if (isExpanded) {
+                                  newExpanded.delete(node.path);
+                                } else {
+                                  newExpanded.add(node.path);
+                                }
+                                setExpandedBOMs(newExpanded);
+                              }}
+                              className="text-gray-500 hover:text-gray-700 text-xs"
+                            >
+                              {isExpanded ? '▼' : '▶'}
+                            </button>
+                          )}
+                          <span className="font-mono text-gray-900 font-medium">
+                            {node.code}
+                            {level === 0 && node.bomQuantity > 1 && (
+                              <span className="text-gray-600 ml-1">({node.bomQuantity.toLocaleString()})</span>
+                            )}
+                          </span>
+                        </div>
                       </td>
-                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-xs truncate" title={bom.bomName}>
-                        {bom.bomName}
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-xs truncate" title={node.name}>
+                        {node.name}
+                        {hasChildren && <span className="text-gray-500 ml-1">({node.children.length} sub)</span>}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-gray-900 border-r border-gray-200">
-                        ${bom.itemsSubtotal.toLocaleString()}
+                        ${node.itemsSubtotal.toLocaleString()}
                       </td>
 
-                      {/* Dynamic AC Type Columns - Clickable */}
+                      {/* Dynamic AC Type Columns - Keep existing logic */}
                       {showQuoted && showCalculated ? (
                         <>
-                          {/* When both selected, show separate Quoted and Calculated columns */}
                           {allACTypes.map(type => {
-                            const quotedCost = bom.detailedCosts[type]?.quotedAmount || 0;
-                            const calculatedCost = bom.detailedCosts[type]?.calculatedAmount || 0;
+                            const quotedCost = node.detailedCosts?.[type]?.quotedAmount || 0;
+                            const calculatedCost = node.detailedCosts?.[type]?.calculatedAmount || 0;
 
                             return (
-                              <>
-                                {/* Quoted Column */}
-                                <td
-                                  key={`${type}-quoted`}
-                                  className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
-                                  title={`Click to toggle ${type} filter`}
-                                >
+                              <Fragment key={`${node.path}-${type}`}>
+                                <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title={`Click to toggle ${type} filter`}>
                                   {quotedCost > 0 ? (
                                     <button
                                       onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
                                       className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
-                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all')
-                                          ? 'text-gray-900 underline'
-                                          : 'text-gray-700'
+                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all') ? 'text-gray-900 underline' : 'text-gray-700'
                                       }`}
                                     >
                                       ${quotedCost.toLocaleString()}
                                     </button>
-                                  ) : (
-                                    <span className="text-gray-400">-</span>
-                                  )}
+                                  ) : <span className="text-gray-400">-</span>}
                                 </td>
-                                {/* Calculated Column */}
-                                <td
-                                  key={`${type}-calculated`}
-                                  className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
-                                  title={`Click to toggle ${type} filter`}
-                                >
+                                <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title={`Click to toggle ${type} filter`}>
                                   {calculatedCost > 0 ? (
                                     <button
                                       onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
                                       className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
-                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all')
-                                          ? 'text-gray-900 underline'
-                                          : 'text-gray-700'
+                                        selectedACTypes.includes(type) && !selectedACTypes.includes('all') ? 'text-gray-900 underline' : 'text-gray-700'
                                       }`}
                                     >
                                       ${calculatedCost.toLocaleString()}
                                     </button>
-                                  ) : (
-                                    <span className="text-gray-400">-</span>
-                                  )}
+                                  ) : <span className="text-gray-400">-</span>}
                                 </td>
-                              </>
+                              </Fragment>
                             );
                           })}
                         </>
                       ) : (
                         <>
-                          {/* When only one selected, show single column */}
                           {allACTypes.map(type => {
-                            const quotedCost = bom.detailedCosts[type]?.quotedAmount || 0;
-                            const calculatedCost = bom.detailedCosts[type]?.calculatedAmount || 0;
+                            const quotedCost = node.detailedCosts?.[type]?.quotedAmount || 0;
+                            const calculatedCost = node.detailedCosts?.[type]?.calculatedAmount || 0;
                             const displayCost = showQuoted ? quotedCost : calculatedCost;
 
                             return (
-                              <td
-                                key={type}
-                                className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer"
-                                title={`Click to toggle ${type} filter`}
-                              >
+                              <td key={type} className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title={`Click to toggle ${type} filter`}>
                                 {displayCost > 0 ? (
                                   <button
                                     onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
                                     className={`font-mono group-hover:text-gray-900 group-hover:underline font-semibold w-full text-right ${
-                                      selectedACTypes.includes(type) && !selectedACTypes.includes('all')
-                                        ? 'text-gray-900 underline'
-                                        : 'text-gray-700'
+                                      selectedACTypes.includes(type) && !selectedACTypes.includes('all') ? 'text-gray-900 underline' : 'text-gray-700'
                                     }`}
                                   >
                                     ${displayCost.toLocaleString()}
                                   </button>
-                                ) : (
-                                  <span className="text-gray-400">-</span>
-                                )}
+                                ) : <span className="text-gray-400">-</span>}
                               </td>
                             );
                           })}
@@ -841,17 +827,38 @@ export default function BOMAdditionalCostsView({
                       )}
 
                       <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200">
-                        ${(showQuoted && showCalculated ? totalCalculated : showQuoted ? totalQuoted : showCalculated ? totalCalculated : 0).toLocaleString()}
+                        ${(showQuoted && showCalculated ? totalCalculated : showQuoted ? totalQuoted : totalCalculated).toLocaleString()}
                       </td>
                       <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200">
-                        ${bom.bomTotalWithAC.toLocaleString()}
+                        ${node.totalCost.toLocaleString()}
                       </td>
                       <td className="px-3 py-2 text-right font-semibold text-gray-900">
-                        {bom.acImpact}%
+                        {acImpact}%
                       </td>
                     </tr>
-                  );
-                })}
+                  ];
+
+                  // Add children rows if expanded
+                  if (isExpanded && hasChildren) {
+                    node.children.forEach((child: any) => {
+                      rows.push(...renderBOMNode(child, level + 1));
+                    });
+                  }
+
+                  return rows;
+                };
+
+                // Render all BOMs from tree
+                const allRows: JSX.Element[] = [];
+                bomTree.forEach(node => {
+                  // Check if this BOM should be shown based on filter
+                  if (selectedBOMs.includes('all') || selectedBOMs.includes(node.code)) {
+                    allRows.push(...renderBOMNode(node, 0));
+                  }
+                });
+
+                return allRows;
+              })()}
               </tbody>
               <tfoot className="bg-gray-100 border-t-2 border-gray-400">
                 <tr>
@@ -863,14 +870,14 @@ export default function BOMAdditionalCostsView({
                         const quotedTotal = acTypeSummary.find(ac => ac.costName === type)?.quoted || 0;
                         const calculatedTotal = acTypeSummary.find(ac => ac.costName === type)?.calculated || 0;
                         return (
-                          <>
-                            <td key={`${type}-quoted`} className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                          <Fragment key={`footer-${type}`}>
+                            <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
                               {quotedTotal > 0 ? `$${quotedTotal.toLocaleString()}` : '-'}
                             </td>
-                            <td key={`${type}-calculated`} className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
+                            <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-300">
                               {calculatedTotal > 0 ? `$${calculatedTotal.toLocaleString()}` : '-'}
                             </td>
-                          </>
+                          </Fragment>
                         );
                       })}
                     </>

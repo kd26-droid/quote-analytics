@@ -53,8 +53,8 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
   }, [data.overall]);
 
   const uniqueBOMs = useMemo(() => {
-    const boms = new Set(data.overall.map(item => item.bomPath.split('.')[0]));
-    return Array.from(boms).sort();
+    const boms = Array.from(new Set(data.overall.map(item => item.bomPath))).sort();
+    return boms;
   }, [data.overall]);
 
   // Apply base filters first (category, BOM, topN) - supports multiple selections
@@ -69,7 +69,7 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
 
     if (!selectedBOMs.includes('all')) {
       items = items.filter(item =>
-        selectedBOMs.some(bom => item.bomPath.startsWith(bom))
+        selectedBOMs.some(bom => item.bomPath === bom || item.bomPath.startsWith(bom + '.'))
       );
     }
 
@@ -509,7 +509,10 @@ export default function VendorView({ data, totalQuoteValue, topVendors, navigate
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={(entry) => `${entry.vendor.split(' ')[0]}: ${entry.percentOfQuote.toFixed(1)}%`}
+                    label={(entry) => {
+                      if (!entry || !entry.vendor) return '';
+                      return `${entry.vendor.split(' ')[0]}: ${entry.percentOfQuote.toFixed(1)}%`;
+                    }}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="totalCost"

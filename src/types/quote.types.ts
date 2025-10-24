@@ -79,6 +79,7 @@ export interface BOMCostComparison {
   bomAdditionalCosts: number;
   bomTotalWithAC: number;
   percentOfQuote: number;
+  bomQuantity?: number; // For volume analysis
 }
 
 export interface Vendor {

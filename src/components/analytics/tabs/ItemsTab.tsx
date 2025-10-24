@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../ui/card';
 import CostView from './items-views/CostView';
@@ -8,10 +8,11 @@ import RateView from './items-views/RateView';
 import AdditionalCostsView from './items-views/AdditionalCostsView';
 import CustomView from './items-views/CustomView';
 import ItemSourceView from './items-views/ItemSourceView';
-import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation } from '../../../types/quote.types';
+import ItemVolumeAnalysisView from './items-views/ItemVolumeAnalysisView';
+import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation, BOMCostComparison } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
 
-export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'item-source' | 'custom';
+export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'item-source' | 'volume-analysis' | 'custom';
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
@@ -20,6 +21,7 @@ interface ItemsTabProps {
   topCategories: Category[];
   topVendors: Vendor[];
   vendorRateDeviation: VendorRateDeviation;
+  bomCostComparison: BOMCostComparison[];
   navigationContext: NavigationContext;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
 }
@@ -31,6 +33,7 @@ export default function ItemsTab({
   topCategories,
   topVendors,
   vendorRateDeviation,
+  bomCostComparison,
   navigationContext,
   navigateToTab
 }: ItemsTabProps) {
@@ -45,6 +48,16 @@ export default function ItemsTab({
     }
   }, [navigationContext]);
 
+  // Detect if volume analysis should be shown
+  const hasVolumeItems = useMemo(() => {
+    const itemCodeCounts = new Map<string, number>();
+    data.overall.forEach(item => {
+      const count = itemCodeCounts.get(item.itemCode) || 0;
+      itemCodeCounts.set(item.itemCode, count + 1);
+    });
+    return Array.from(itemCodeCounts.values()).some(count => count > 1);
+  }, [data.overall]);
+
   const views = [
     { id: 'cost' as ItemViewType, label: 'Cost View', icon: '💰' },
     { id: 'vendor' as ItemViewType, label: 'Vendor View', icon: '🏢' },
@@ -52,6 +65,10 @@ export default function ItemsTab({
     { id: 'rate' as ItemViewType, label: 'Rate View', icon: '📊' },
     { id: 'additional-costs' as ItemViewType, label: 'Additional Costs', icon: '💸' },
     { id: 'item-source' as ItemViewType, label: 'Item Source', icon: '🔄' },
+    ...(hasVolumeItems
+      ? [{ id: 'volume-analysis' as ItemViewType, label: 'Volume Analysis', icon: '📈' }]
+      : []
+    ),
     { id: 'custom' as ItemViewType, label: 'Custom View', icon: '⚙️' }
   ];
 
@@ -134,6 +151,14 @@ export default function ItemsTab({
             data={data}
             totalQuoteValue={totalQuoteValue}
             navigationContext={navigationContext}
+            navigateToTab={navigateToTab}
+          />
+        )}
+        {selectedView === 'volume-analysis' && hasVolumeItems && (
+          <ItemVolumeAnalysisView
+            data={data}
+            bomCostComparison={bomCostComparison}
+            totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
           />
         )}

@@ -106,8 +106,8 @@ export default function CostView({ data, totalQuoteValue, totalItems, navigation
 
   // Get unique BOMs and Vendors
   const uniqueBOMs = useMemo(() => {
-    const boms = new Set(data.overall.map(item => item.bomPath.split('.')[0]));
-    return Array.from(boms).sort();
+    const boms = Array.from(new Set(data.overall.map(item => item.bomPath))).sort();
+    return boms;
   }, [data.overall]);
 
   const uniqueVendors = useMemo(() => {
@@ -141,7 +141,7 @@ export default function CostView({ data, totalQuoteValue, totalItems, navigation
     // Apply BOM filter (multiple)
     if (!selectedBOMs.includes('all')) {
       items = items.filter(item =>
-        selectedBOMs.some(bom => item.bomPath.startsWith(bom))
+        selectedBOMs.some(bom => item.bomPath === bom || item.bomPath.startsWith(bom + '.'))
       );
     }
 
