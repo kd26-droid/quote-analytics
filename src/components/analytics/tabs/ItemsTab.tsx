@@ -17,7 +17,8 @@ export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
-  costViewData?: CostViewData;
+  costViewData: CostViewData;
+  currencySymbol: string;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -31,6 +32,7 @@ interface ItemsTabProps {
 export default function ItemsTab({
   data,
   costViewData,
+  currencySymbol,
   totalQuoteValue,
   totalItems,
   topCategories,
@@ -104,10 +106,11 @@ export default function ItemsTab({
 
       {/* View Content */}
       <div>
-        {selectedView === 'cost' && costViewData && (
+        {selectedView === 'cost' && (
           <CostView
             data={data}
             costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             totalItems={totalItems}
             navigationContext={navigationContext}
@@ -118,6 +121,8 @@ export default function ItemsTab({
         {selectedView === 'vendor' && (
           <VendorView
             data={data}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             topVendors={topVendors}
             navigateToTab={navigateToTab}
@@ -127,6 +132,8 @@ export default function ItemsTab({
         {selectedView === 'category' && (
           <CategoryView
             data={data}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             topCategories={topCategories}
             navigateToTab={navigateToTab}
@@ -136,6 +143,8 @@ export default function ItemsTab({
         {selectedView === 'rate' && (
           <RateView
             data={data}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             vendorRateDeviation={vendorRateDeviation}
             navigateToTab={navigateToTab}
@@ -145,6 +154,8 @@ export default function ItemsTab({
         {selectedView === 'additional-costs' && (
           <AdditionalCostsView
             data={data}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}

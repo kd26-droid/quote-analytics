@@ -1,709 +1,726 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent } from '../../../ui/card';
-import { Badge } from '../../../ui/badge';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { TopItemsAnalytics } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
+import type { CostViewData, CostViewItem } from '../../../../services/api';
 
 interface AdditionalCostsViewProps {
   data: TopItemsAnalytics;
+  costViewData?: CostViewData;
+  currencySymbol?: string;
   totalQuoteValue: number;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
   navigationContext?: NavigationContext;
 }
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
-// Mock additional cost types for each item
-const getItemAdditionalCosts = (itemCode: string, itemCost: number, quantity: number) => {
-  const costs = [];
-  const random = itemCode.charCodeAt(0) % 5;
-
-  // MOQ - Usually OVERALL_QUANTITY (one-time setup cost)
-  if (random >= 1) {
-    const totalCost = Math.floor(itemCost * 0.02);
-    costs.push({
-      type: 'MOQ',
-      costType: 'ABSOLUTE_VALUE',
-      allocationType: 'OVERALL_QUANTITY',
-      totalAmount: totalCost,
-      perUnitAmount: totalCost / quantity
-    });
-  }
-
-  // Testing - Usually PER_UNIT (test each item)
-  if (random >= 2) {
-    const perUnit = Math.floor((itemCost / quantity) * 0.015);
-    costs.push({
-      type: 'Testing',
-      costType: 'ABSOLUTE_VALUE',
-      allocationType: 'PER_UNIT',
-      totalAmount: perUnit * quantity,
-      perUnitAmount: perUnit
-    });
-  }
-
-  // Coating - Usually PERCENTAGE (5% of base rate)
-  if (random >= 3) {
-    const percentage = 5;
-    const baseRate = itemCost / quantity;
-    const perUnit = (percentage / 100) * baseRate;
-    costs.push({
-      type: 'Coating',
-      costType: 'PERCENTAGE',
-      percentageValue: percentage,
-      allocationType: 'PER_UNIT',
-      totalAmount: perUnit * quantity,
-      perUnitAmount: perUnit
-    });
-  }
-
-  // Freight - Usually OVERALL_QUANTITY (ship entire batch)
-  if (random >= 4) {
-    const totalCost = Math.floor(itemCost * 0.025);
-    costs.push({
-      type: 'Freight',
-      costType: 'ABSOLUTE_VALUE',
-      allocationType: 'OVERALL_QUANTITY',
-      totalAmount: totalCost,
-      perUnitAmount: totalCost / quantity
-    });
-  }
-
-  return costs;
+const SOURCE_COLORS: Record<string, string> = {
+  'PROJECT': '#3b82f6',
+  'EVENT': '#10b981',
+  'QUOTE': '#f59e0b'
 };
 
-export default function AdditionalCostsView({ data, totalQuoteValue, navigationContext }: AdditionalCostsViewProps) {
-  const [selectedACTypes, setSelectedACTypes] = useState<string[]>(['all']); // Changed to array
-  const [minACAmount, setMinACAmount] = useState(0);
-  const [hasACOnly, setHasACOnly] = useState(false);
-  const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']); // Changed to array
-  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']); // Changed to array
-  const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']); // Changed to array
+const SOURCE_LABELS: Record<string, string> = {
+  'PROJECT': 'Project',
+  'EVENT': 'Event',
+  'QUOTE': 'Quote'
+};
+
+export default function AdditionalCostsView({
+  costViewData,
+  currencySymbol = '₹',
+  totalQuoteValue,
+  navigateToTab,
+  navigationContext
+}: AdditionalCostsViewProps) {
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 10;
+
+  // Filters
+  const [selectedACTypes, setSelectedACTypes] = useState<string[]>(['all']);
+  const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
+  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
+  const [hasACOnly, setHasACOnly] = useState(true); // Default to show only items with AC
   const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Get items from costViewData
+  const items = costViewData?.items || [];
+  const filters = costViewData?.filters;
+
+  // Auto-select from navigation context
+  useEffect(() => {
+    if (navigationContext?.selectedItem) {
+      setSearchQuery(navigationContext.selectedItem);
+    }
+  }, [navigationContext]);
+
+  // Reset page when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedACTypes, selectedVendors, selectedBOMs, selectedCategories, hasACOnly]);
 
   // Helper function to toggle multi-select
   const toggleSelection = (current: string[], value: string) => {
-    if (value === 'all') {
-      return ['all'];
-    }
-
+    if (value === 'all') return ['all'];
     let newSelection = current.filter(v => v !== 'all');
-
     if (newSelection.includes(value)) {
       newSelection = newSelection.filter(v => v !== value);
-      if (newSelection.length === 0) {
-        return ['all'];
-      }
+      if (newSelection.length === 0) return ['all'];
     } else {
       newSelection.push(value);
     }
-
     return newSelection;
   };
 
-  // Get unique values for filters
-  const uniqueCategories = useMemo(() => {
-    const categories = Array.from(new Set(data.overall.map(item => item.category).filter(Boolean))).sort();
-    return categories as string[];
-  }, [data.overall]);
-
-  const uniqueBOMs = useMemo(() => {
-    const boms = Array.from(new Set(data.overall.map(item => item.bomPath))).sort();
-    return boms;
-  }, [data.overall]);
-
-  const uniqueVendors = useMemo(() => {
-    const vendors = Array.from(new Set(data.overall.map(item => item.vendor))).sort();
-    return vendors;
-  }, [data.overall]);
-
-  // Calculate AC data for all items
-  const itemsWithAC = useMemo(() => {
-    return data.overall.map(item => {
-      const acList = getItemAdditionalCosts(item.itemCode, item.totalCost, item.quantity);
-      const totalAC = acList.reduce((sum, ac) => sum + ac.totalAmount, 0);
-      return {
-        ...item,
-        additionalCosts: acList,
-        totalAC,
-        finalCost: item.totalCost + totalAC
-      };
+  // Get all unique AC types from items
+  const allACTypes = useMemo(() => {
+    const acTypeSet = new Set<string>();
+    items.forEach(item => {
+      item.additional_costs.forEach(ac => {
+        acTypeSet.add(ac.cost_name);
+      });
     });
-  }, [data.overall]);
+    return Array.from(acTypeSet).sort();
+  }, [items]);
 
-  // Filter items based on AC criteria - supports multiple selections
+  // Get unique BOMs with hierarchy
+  const { uniqueBOMs, rootBOMCount } = useMemo(() => {
+    const bomSet = new Set<string>();
+    const rootBOMs = new Set<string>();
+
+    items.forEach(item => {
+      if (item.bom_path) {
+        bomSet.add(item.bom_path);
+        const parts = item.bom_path.split(' > ');
+        rootBOMs.add(parts[0]);
+        let path = '';
+        parts.forEach((part, idx) => {
+          path = idx === 0 ? part : `${path} > ${part}`;
+          bomSet.add(path);
+        });
+      }
+    });
+
+    const sortedBOMs = Array.from(bomSet).sort((a, b) => {
+      const depthA = a.split(' > ').length;
+      const depthB = b.split(' > ').length;
+      if (depthA !== depthB) return depthA - depthB;
+      return a.localeCompare(b);
+    });
+
+    return { uniqueBOMs: sortedBOMs, rootBOMCount: rootBOMs.size };
+  }, [items]);
+
+  // Get unique vendors
+  const uniqueVendors = useMemo(() => {
+    const vendors = new Set<string>();
+    items.forEach(item => {
+      if (item.vendor_name) vendors.add(item.vendor_name);
+    });
+    return Array.from(vendors).sort();
+  }, [items]);
+
+  // Get unique categories
+  const uniqueCategories = useMemo(() => {
+    return filters?.tag_list || [];
+  }, [filters]);
+
+  // Filter items
   const filteredItems = useMemo(() => {
-    let items = itemsWithAC;
+    let result = [...items];
 
-    // Filter by Categories (multiple)
-    if (!selectedCategories.includes('all')) {
-      items = items.filter(item =>
-        selectedCategories.includes(item.category || 'Uncategorized')
+    // Search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      result = result.filter(item =>
+        item.item_code.toLowerCase().includes(query) ||
+        item.item_name.toLowerCase().includes(query)
       );
     }
 
-    // Filter by BOMs (multiple)
-    if (!selectedBOMs.includes('all')) {
-      items = items.filter(item =>
-        selectedBOMs.some(bom => item.bomPath === bom || item.bomPath.startsWith(bom + '.'))
-      );
-    }
-
-    // Filter by Vendors (multiple)
-    if (!selectedVendors.includes('all')) {
-      items = items.filter(item =>
-        selectedVendors.includes(item.vendor)
-      );
-    }
-
-    // Filter by AC types (multiple)
-    if (!selectedACTypes.includes('all')) {
-      items = items.filter(item =>
-        item.additionalCosts.some(ac => selectedACTypes.includes(ac.type))
-      );
-    }
-
-    // Filter by min AC amount
-    items = items.filter(item => item.totalAC >= minACAmount);
-
-    // Filter has AC only
+    // Has AC only
     if (hasACOnly) {
-      items = items.filter(item => item.totalAC > 0);
+      result = result.filter(item => item.total_additional_cost > 0);
     }
 
-    return items;
-  }, [itemsWithAC, selectedCategories, selectedBOMs, selectedVendors, selectedACTypes, minACAmount, hasACOnly]);
+    // AC type filter
+    if (!selectedACTypes.includes('all')) {
+      result = result.filter(item =>
+        item.additional_costs.some(ac => selectedACTypes.includes(ac.cost_name))
+      );
+    }
 
-  // AC type breakdown - shows ONLY selected types when filtered
+    // Vendor filter
+    if (!selectedVendors.includes('all')) {
+      result = result.filter(item =>
+        item.vendor_name && selectedVendors.includes(item.vendor_name)
+      );
+    }
+
+    // BOM filter
+    if (!selectedBOMs.includes('all')) {
+      result = result.filter(item =>
+        selectedBOMs.some(bom =>
+          item.bom_path === bom || item.bom_path?.startsWith(bom + ' > ')
+        )
+      );
+    }
+
+    // Category filter
+    if (!selectedCategories.includes('all')) {
+      result = result.filter(item =>
+        item.tags.some(tag => selectedCategories.includes(tag))
+      );
+    }
+
+    // Sort by total AC descending
+    result.sort((a, b) => b.total_additional_cost - a.total_additional_cost);
+
+    return result;
+  }, [items, searchQuery, hasACOnly, selectedACTypes, selectedVendors, selectedBOMs, selectedCategories]);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const paginatedItems = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredItems.slice(start, start + itemsPerPage);
+  }, [filteredItems, currentPage, itemsPerPage]);
+
+  // AC type breakdown for charts
   const acTypeBreakdown = useMemo(() => {
     const typeMap = new Map<string, number>();
     filteredItems.forEach(item => {
-      item.additionalCosts.forEach(ac => {
-        // If specific AC types are selected, only count those types
-        if (selectedACTypes.includes('all') || selectedACTypes.includes(ac.type)) {
-          typeMap.set(ac.type, (typeMap.get(ac.type) || 0) + ac.totalAmount);
+      item.additional_costs.forEach(ac => {
+        if (selectedACTypes.includes('all') || selectedACTypes.includes(ac.cost_name)) {
+          typeMap.set(ac.cost_name, (typeMap.get(ac.cost_name) || 0) + ac.total_amount);
         }
       });
     });
-    return Array.from(typeMap.entries()).map(([type, total]) => ({ type, total }));
+    return Array.from(typeMap.entries())
+      .map(([type, total]) => ({ type, total }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 8); // Top 8 for chart
   }, [filteredItems, selectedACTypes]);
 
-  const totalAC = useMemo(() => {
-    if (selectedACTypes.includes('all')) {
-      return filteredItems.reduce((sum, item) => sum + item.totalAC, 0);
+  // Key insights
+  const insights = useMemo(() => {
+    const totalAC = filteredItems.reduce((sum, item) => sum + item.total_additional_cost, 0);
+    const itemsWithAC = filteredItems.filter(i => i.total_additional_cost > 0).length;
+    const avgACPerItem = itemsWithAC > 0 ? totalAC / itemsWithAC : 0;
+    const totalItemCost = filteredItems.reduce((sum, item) => sum + (item.base_rate * item.quantity), 0);
+    const totalFinalCost = filteredItems.reduce((sum, item) => sum + item.total_amount, 0);
+
+    return { totalAC, itemsWithAC, avgACPerItem, totalItemCost, totalFinalCost, acTypesCount: acTypeBreakdown.length };
+  }, [filteredItems, acTypeBreakdown]);
+
+  // Dynamic columns - get AC types present in current page items
+  const dynamicACColumns = useMemo(() => {
+    const acTypesInPage = new Set<string>();
+    paginatedItems.forEach(item => {
+      item.additional_costs.forEach(ac => {
+        acTypesInPage.add(ac.cost_name);
+      });
+    });
+    // Sort and limit to top 8 to avoid too many columns
+    return Array.from(acTypesInPage).sort().slice(0, 8);
+  }, [paginatedItems]);
+
+  // Tags display helper - shows count with hover for all, clickable to navigate
+  const renderTags = (tags: string[], isNearBottom: boolean = false) => {
+    if (tags.length === 0) {
+      return <span className="text-gray-500 text-xs">Uncategorized</span>;
     }
-    // Calculate total for only selected AC types
-    return filteredItems.reduce((sum, item) => {
-      const relevantACs = item.additionalCosts.filter(ac => selectedACTypes.includes(ac.type));
-      return sum + relevantACs.reduce((s, ac) => s + ac.totalAmount, 0);
-    }, 0);
-  }, [filteredItems, selectedACTypes]);
 
-  const acTypes = ['MOQ', 'Testing', 'Coating', 'Freight'];
+    if (tags.length === 1) {
+      return (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            navigateToTab('items', { selectedCategory: tags[0] });
+          }}
+          className="text-xs text-blue-700 hover:text-blue-900 hover:underline font-medium"
+        >
+          {tags[0]}
+        </button>
+      );
+    }
+
+    return (
+      <div className="relative group">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            navigateToTab('items', { selectedCategory: tags[0] });
+          }}
+          className="text-xs text-blue-700 hover:text-blue-900 hover:underline cursor-pointer font-medium"
+        >
+          {tags.length} categories
+        </button>
+        <div className={`absolute z-20 hidden group-hover:block bg-white border border-gray-300 rounded shadow-lg p-2 min-w-[150px] left-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
+          <div className="text-xs font-bold text-gray-700 mb-1 border-b pb-1">Categories ({tags.length}):</div>
+          {tags.map((tag, idx) => (
+            <button
+              key={idx}
+              onClick={(e) => {
+                e.stopPropagation();
+                navigateToTab('items', { selectedCategory: tag });
+              }}
+              className="block text-xs text-blue-700 hover:text-blue-900 hover:underline py-0.5 w-full text-left"
+            >
+              {tag}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // Get AC value for an item by cost name
+  const getACValue = (item: CostViewItem, costName: string) => {
+    const ac = item.additional_costs.find(a => a.cost_name === costName);
+    return ac ? { total: ac.total_amount, perUnit: ac.per_unit_amount, type: ac.cost_type } : null;
+  };
 
   return (
     <div className="space-y-4">
-      {/* Multi-Select Filters */}
+      {/* Search and Filters Bar */}
       <Card className="border-gray-200">
         <CardContent className="p-3">
-          <div className="space-y-3">
-            {/* Quick Stats */}
-            <div className="flex items-center gap-4 text-xs">
-              <span className="font-semibold text-gray-700">
-                Filters: {selectedACTypes.includes('all') ? 'All AC Types' : `${selectedACTypes.length} AC Types`},
-                {selectedCategories.includes('all') ? ' All Categories' : ` ${selectedCategories.length} Categories`},
-                {selectedVendors.includes('all') ? ' All Vendors' : ` ${selectedVendors.length} Vendors`},
-                {selectedBOMs.includes('all') ? ' All BOMs' : ` ${selectedBOMs.length} BOMs`}
-              </span>
-              <button
-                onClick={() => setFiltersExpanded(!filtersExpanded)}
-                className="ml-auto px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors"
-              >
-                {filtersExpanded ? '▲ Hide Filters' : '▼ Show Filters'}
-              </button>
-              {(!selectedACTypes.includes('all') || !selectedCategories.includes('all') || !selectedVendors.includes('all') || !selectedBOMs.includes('all') || minACAmount !== 0 || hasACOnly) && (
-                <button
-                  onClick={() => {
-                    setSelectedCategories(['all']);
-                    setSelectedBOMs(['all']);
-                    setSelectedVendors(['all']);
-                    setSelectedACTypes(['all']);
-                    setMinACAmount(0);
-                    setHasACOnly(false);
-                  }}
-                  className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
-                >
-                  Reset All
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* Search */}
+            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by item code or name..."
+                className="flex-1 px-3 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery('')} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700">
+                  ✕
                 </button>
               )}
             </div>
 
-            {/* Expanded Multi-Select Checkboxes */}
-            {filtersExpanded && (
-              <div className="pt-3 border-t grid grid-cols-4 gap-4">
-                {/* AC Types */}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-gray-700 mb-2">AC Types:</div>
-                  <label className="flex items-center gap-2 cursor-pointer text-xs">
+            {/* Has AC Only Toggle */}
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hasACOnly}
+                onChange={(e) => setHasACOnly(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-xs font-bold text-gray-700">Has AC Only</span>
+            </label>
+
+            {/* Filter Summary */}
+            <span className="text-xs text-gray-600">
+              {!selectedACTypes.includes('all') && `AC Types: ${selectedACTypes.length}`}
+              {!selectedVendors.includes('all') && ` | Vendors: ${selectedVendors.length}`}
+              {!selectedBOMs.includes('all') && ` | BOMs: ${selectedBOMs.length}`}
+            </span>
+
+            {/* More Filters Toggle */}
+            <button
+              onClick={() => setFiltersExpanded(!filtersExpanded)}
+              className="ml-auto px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
+            >
+              {filtersExpanded ? '▲ Less' : '▼ More Filters'}
+            </button>
+
+            {/* Reset */}
+            {(searchQuery || !selectedACTypes.includes('all') || !selectedVendors.includes('all') || !selectedBOMs.includes('all') || !selectedCategories.includes('all')) && (
+              <button
+                onClick={() => {
+                  setSearchQuery('');
+                  setSelectedACTypes(['all']);
+                  setSelectedVendors(['all']);
+                  setSelectedBOMs(['all']);
+                  setSelectedCategories(['all']);
+                }}
+                className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          {/* Expanded Filters */}
+          {filtersExpanded && (
+            <div className="mt-3 pt-3 border-t grid grid-cols-4 gap-4">
+              {/* AC Types */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-gray-800 block">AC Types ({allACTypes.length}):</span>
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
                     <input
                       type="checkbox"
                       checked={selectedACTypes.includes('all')}
                       onChange={() => setSelectedACTypes(['all'])}
                       className="rounded"
                     />
-                    <span className="font-medium">All</span>
+                    <span className="font-medium">All Types</span>
                   </label>
-                  {acTypes.map(type => (
-                    <label key={type} className="flex items-center gap-2 cursor-pointer text-xs">
+                  {allACTypes.slice(0, 10).map(type => (
+                    <label key={type} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
                       <input
                         type="checkbox"
                         checked={selectedACTypes.includes(type)}
                         onChange={() => setSelectedACTypes(toggleSelection(selectedACTypes, type))}
                         className="rounded"
                       />
-                      <span>{type}</span>
+                      <span className="truncate" title={type}>{type}</span>
                     </label>
                   ))}
                 </div>
+              </div>
 
-                {/* Categories */}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-gray-700 mb-2">Categories:</div>
-                  <label className="flex items-center gap-2 cursor-pointer text-xs">
-                    <input
-                      type="checkbox"
-                      checked={selectedCategories.includes('all')}
-                      onChange={() => setSelectedCategories(['all'])}
-                      className="rounded"
-                    />
-                    <span className="font-medium">All</span>
-                  </label>
-                  {uniqueCategories.slice(0, 5).map(cat => (
-                    <label key={cat} className="flex items-center gap-2 cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        checked={selectedCategories.includes(cat)}
-                        onChange={() => setSelectedCategories(toggleSelection(selectedCategories, cat))}
-                        className="rounded"
-                      />
-                      <span>{cat}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {/* Vendors */}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-gray-700 mb-2">Vendors:</div>
-                  <label className="flex items-center gap-2 cursor-pointer text-xs">
+              {/* Vendors */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-gray-800 block">Vendors:</span>
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
                     <input
                       type="checkbox"
                       checked={selectedVendors.includes('all')}
                       onChange={() => setSelectedVendors(['all'])}
                       className="rounded"
                     />
-                    <span className="font-medium">All</span>
+                    <span className="font-medium">All Vendors</span>
                   </label>
-                  {uniqueVendors.slice(0, 5).map(vendor => (
-                    <label key={vendor} className="flex items-center gap-2 cursor-pointer text-xs">
+                  {uniqueVendors.slice(0, 10).map(vendor => (
+                    <label key={vendor} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
                       <input
                         type="checkbox"
                         checked={selectedVendors.includes(vendor)}
                         onChange={() => setSelectedVendors(toggleSelection(selectedVendors, vendor))}
                         className="rounded"
                       />
-                      <span className="truncate">{vendor.split(' ')[0]}</span>
+                      <span className="truncate">{vendor}</span>
                     </label>
                   ))}
                 </div>
+              </div>
 
-                {/* BOMs */}
-                <div className="space-y-2">
-                  <div className="text-xs font-bold text-gray-700 mb-2">BOMs:</div>
-                  <label className="flex items-center gap-2 cursor-pointer text-xs">
+              {/* Categories */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-gray-800 block">Categories:</span>
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                    <input
+                      type="checkbox"
+                      checked={selectedCategories.includes('all')}
+                      onChange={() => setSelectedCategories(['all'])}
+                      className="rounded"
+                    />
+                    <span className="font-medium">All Categories</span>
+                  </label>
+                  {uniqueCategories.slice(0, 10).map(cat => (
+                    <label key={cat} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes(cat)}
+                        onChange={() => setSelectedCategories(toggleSelection(selectedCategories, cat))}
+                        className="rounded"
+                      />
+                      <span className="truncate">{cat}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* BOMs - Grouped */}
+              <div className="space-y-2">
+                <span className="text-xs font-bold text-gray-800 block">BOMs ({rootBOMCount}):</span>
+                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
+                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
                     <input
                       type="checkbox"
                       checked={selectedBOMs.includes('all')}
                       onChange={() => setSelectedBOMs(['all'])}
                       className="rounded"
                     />
-                    <span className="font-medium">All</span>
+                    <span className="font-medium">All BOMs</span>
                   </label>
-                  {uniqueBOMs.slice(0, 5).map(bom => (
-                    <label key={bom} className="flex items-center gap-2 cursor-pointer text-xs">
-                      <input
-                        type="checkbox"
-                        checked={selectedBOMs.includes(bom)}
-                        onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, bom))}
-                        className="rounded"
-                      />
-                      <span>BOM {bom}</span>
-                    </label>
-                  ))}
+                  {(() => {
+                    const rootBOMsList = uniqueBOMs.filter(bom => !bom.includes(' > '));
+                    return rootBOMsList.map(rootBom => {
+                      const childBOMs = uniqueBOMs.filter(bom => bom.startsWith(rootBom + ' > '));
+                      const hasChildren = childBOMs.length > 0;
+                      const isRootSelected = selectedBOMs.includes(rootBom);
+
+                      return (
+                        <div key={rootBom} className="border border-gray-200 rounded mb-1">
+                          <div className="flex items-center gap-2 p-1.5 bg-gray-50 hover:bg-gray-100 rounded-t">
+                            <input
+                              type="checkbox"
+                              checked={isRootSelected}
+                              onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, rootBom))}
+                              className="rounded"
+                            />
+                            <span className="text-xs font-medium text-gray-800 flex-1">{rootBom}</span>
+                            {hasChildren && (
+                              <span className="text-[10px] text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded">
+                                {childBOMs.length} sub
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               </div>
-            )}
-
-            {/* Other Filters */}
-            {filtersExpanded && (
-              <div className="pt-3 border-t flex items-center gap-4 flex-wrap">
-                <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-gray-600">Min AC:</span>
-                <span className="text-xs text-gray-500">$</span>
-                <input
-                  type="number"
-                  min="0"
-                  max="100000"
-                  step="10"
-                  value={minACAmount}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === '') {
-                      setMinACAmount(0);
-                    } else {
-                      setMinACAmount(Math.max(0, Number(val)));
-                    }
-                  }}
-                  className="w-20 px-2 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={hasACOnly}
-                  onChange={(e) => setHasACOnly(e.target.checked)}
-                  className="rounded"
-                />
-                <span className="text-xs font-semibold text-gray-600">Has AC Only</span>
-              </label>
             </div>
           )}
-          </div>
         </CardContent>
       </Card>
 
-      {/* Key Insights - Clickable Cards */}
-      <div className="grid grid-cols-4 gap-4">
-        <Card
-          className="border-gray-200 hover:border-orange-400 transition-all cursor-pointer hover:shadow-md"
-          onClick={() => setSelectedACTypes(['all'])}
-          title="Click to show all AC types"
-        >
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Total AC</div>
-            <div className="text-2xl font-bold text-orange-600">${totalAC.toLocaleString()}</div>
-            <div className="text-xs text-gray-500 mt-1">{((totalAC / totalQuoteValue) * 100).toFixed(1)}% of quote</div>
+      {/* Key Insights */}
+      <div className="grid grid-cols-5 gap-3">
+        <Card className="border-gray-200">
+          <CardContent className="p-3">
+            <div className="text-xs font-bold text-gray-800 mb-1">Total AC</div>
+            <div className="text-2xl font-bold text-orange-600">{currencySymbol}{(insights.totalAC / 1000).toFixed(0)}k</div>
+            <div className="text-xs font-bold text-gray-700 mt-1">{((insights.totalAC / totalQuoteValue) * 100).toFixed(1)}% of quote</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Items with AC</div>
-            <div className="text-2xl font-bold text-blue-600">
-              {itemsWithAC.filter(i => i.totalAC > 0).length}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">of {data.overall.length} total</div>
+          <CardContent className="p-3">
+            <div className="text-xs font-bold text-gray-800 mb-1">Items with AC</div>
+            <div className="text-2xl font-bold text-blue-600">{insights.itemsWithAC}</div>
+            <div className="text-xs font-bold text-gray-700 mt-1">of {filteredItems.length} filtered</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Avg AC per Item</div>
-            <div className="text-2xl font-bold text-green-600">
-              ${Math.floor(totalAC / (itemsWithAC.filter(i => i.totalAC > 0).length || 1)).toLocaleString()}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">for items with AC</div>
+          <CardContent className="p-3">
+            <div className="text-xs font-bold text-gray-800 mb-1">Avg AC/Item</div>
+            <div className="text-2xl font-bold text-green-600">{currencySymbol}{insights.avgACPerItem.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
+            <div className="text-xs font-bold text-gray-700 mt-1">for items with AC</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">AC Types</div>
-            <div className="text-2xl font-bold text-purple-600">{acTypeBreakdown.length}</div>
-            <div className="text-xs text-gray-500 mt-1">different types</div>
+          <CardContent className="p-3">
+            <div className="text-xs font-bold text-gray-800 mb-1">AC Types</div>
+            <div className="text-2xl font-bold text-purple-600">{insights.acTypesCount}</div>
+            <div className="text-xs font-bold text-gray-700 mt-1">unique types</div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-gray-200">
+          <CardContent className="p-3">
+            <div className="text-xs font-bold text-gray-800 mb-1">Total Final Cost</div>
+            <div className="text-2xl font-bold text-indigo-600">{currencySymbol}{(insights.totalFinalCost / 1000).toFixed(0)}k</div>
+            <div className="text-xs font-bold text-gray-700 mt-1">incl. all AC</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Charts - Dynamic based on AC Type selection */}
+      {/* Charts */}
       <div className="grid grid-cols-2 gap-4">
-        {/* AC Type Breakdown */}
+        {/* AC Type Breakdown Pie */}
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <h4 className="font-semibold text-gray-900 mb-3 text-sm">
-              {selectedACTypes.includes('all')
-                ? 'Additional Cost Breakdown by Type'
-                : `${selectedACTypes.join(', ')} Costs - Items Breakdown`}
-            </h4>
-            <ResponsiveContainer width="100%" height={200}>
-              {selectedACTypes.includes('all') || selectedACTypes.length > 1 ? (
-                // Show all AC types in pie chart
-                <PieChart>
-                  <Pie
-                    data={acTypeBreakdown}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={(entry) => `${entry.type}: $${(entry.total / 1000).toFixed(0)}k`}
-                    outerRadius={70}
-                    fill="#8884d8"
-                    dataKey="total"
-                  >
-                    {acTypeBreakdown.map((_entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number, _name: string, props: any) => {
-                      const totalACCalc = acTypeBreakdown.reduce((sum, item) => sum + item.total, 0) || 1;
-                      const percent = (value / totalACCalc) * 100;
-                      return [`$${value.toLocaleString()} in ${props.payload.type} costs - ${percent.toFixed(1)}% of all AC`, `${props.payload.type}`];
-                    }}
-                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                  />
-                </PieChart>
-              ) : (
-                // Show top items for selected AC type in bar chart (single type only)
-                <BarChart
-                  data={filteredItems.slice(0, 6).map(item => ({
-                    ...item,
-                    selectedACAmount: item.additionalCosts.find(ac => ac.type === selectedACTypes[0])?.totalAmount || 0
-                  }))}
-                  layout="vertical"
+            <h4 className="font-bold text-gray-900 mb-3 text-sm">AC Breakdown by Type (Top 8)</h4>
+            <ResponsiveContainer width="100%" height={220}>
+              <PieChart>
+                <Pie
+                  data={acTypeBreakdown}
+                  cx="35%"
+                  cy="50%"
+                  labelLine={false}
+                  outerRadius={65}
+                  fill="#8884d8"
+                  dataKey="total"
+                  nameKey="type"
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
-                  <YAxis dataKey="itemCode" type="category" width={80} tick={{ fontSize: 10 }} />
-                  <Tooltip
-                    formatter={(value: number, _name: string, props: any) => [
-                      `${selectedACTypes[0]}: $${value.toLocaleString()} - Item Cost: $${props.payload.totalCost.toLocaleString()}`,
-                      `${selectedACTypes[0]} Cost`
-                    ]}
-                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                  />
-                  <Bar dataKey="selectedACAmount" fill="#f97316" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              )}
+                  {acTypeBreakdown.map((_entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value: number, _name: string, props: any) => {
+                    const total = acTypeBreakdown.reduce((s, i) => s + i.total, 0);
+                    const percent = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                    return [`${currencySymbol}${value.toLocaleString()} (${percent}%)`, props.payload.type];
+                  }}
+                  contentStyle={{ fontSize: 11 }}
+                />
+                <Legend
+                  layout="vertical"
+                  align="right"
+                  verticalAlign="middle"
+                  wrapperStyle={{ fontSize: '10px', paddingLeft: '10px' }}
+                  formatter={(value) => value.length > 15 ? value.substring(0, 15) + '...' : value}
+                />
+              </PieChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* Category/Vendor Breakdown or Top Items */}
+        {/* Top Items by AC Bar */}
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <h4 className="font-semibold text-gray-900 mb-3 text-sm">
-              {selectedACTypes.includes('all')
-                ? 'Top Items by Total Additional Cost'
-                : `${selectedACTypes.join(', ')} Cost by Category`}
-            </h4>
-            <ResponsiveContainer width="100%" height={200}>
-              {selectedACTypes.includes('all') || selectedACTypes.length > 1 ? (
-                // Show top items when all AC types selected
-                <BarChart data={filteredItems.slice(0, 6)} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis type="number" tick={{ fontSize: 10 }} tickFormatter={(v) => `$${(v/1000).toFixed(0)}k`} />
-                  <YAxis dataKey="itemCode" type="category" width={80} tick={{ fontSize: 10 }} />
-                  <Tooltip
-                    formatter={(value: number, _name: string, props: any) => [
-                      `Total AC: $${value.toLocaleString()} - Item Cost: $${props.payload.totalCost.toLocaleString()} - Final: $${props.payload.finalCost.toLocaleString()}`,
-                      'Total Additional Costs'
-                    ]}
-                    labelFormatter={(label) => `Item: ${label}`}
-                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                  />
-                  <Bar dataKey="totalAC" fill="#f97316" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              ) : (
-                // Show category breakdown when specific AC type selected
-                <PieChart>
-                  <Pie
-                    data={(() => {
-                      const categoryMap = new Map<string, number>();
-                      filteredItems.forEach(item => {
-                        const cat = item.category || 'Uncategorized';
-                        const acOfType = item.additionalCosts.find(ac => ac.type === selectedACTypes[0]);
-                        if (acOfType) {
-                          categoryMap.set(cat, (categoryMap.get(cat) || 0) + acOfType.totalAmount);
-                        }
-                      });
-                      const totalACForType = Array.from(categoryMap.values()).reduce((s, v) => s + v, 0) || 1;
-                      return Array.from(categoryMap.entries()).map(([category, cost]) => ({
-                        category,
-                        cost,
-                        percent: (cost / totalACForType) * 100
-                      }));
-                    })()}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={(entry) => {
-                      if (!entry || !entry.category) return '';
-                      return `${entry.category.split(' ')[0]}: ${entry.percent?.toFixed(1) || 0}%`;
-                    }}
-                    outerRadius={70}
-                    fill="#8884d8"
-                    dataKey="cost"
-                  >
-                    {(() => {
-                      const categoryMap = new Map<string, number>();
-                      filteredItems.forEach(item => {
-                        const cat = item.category || 'Uncategorized';
-                        const acOfType = item.additionalCosts.find(ac => ac.type === selectedACTypes[0]);
-                        if (acOfType) {
-                          categoryMap.set(cat, (categoryMap.get(cat) || 0) + acOfType.totalAmount);
-                        }
-                      });
-                      return Array.from(categoryMap.entries()).map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ));
-                    })()}
-                  </Pie>
-                  <Tooltip
-                    formatter={(value: number, _name: string, props: any) => [
-                      `${selectedACTypes[0]}: $${value.toLocaleString()} - ${props.payload.percent?.toFixed(1) || 0}% of ${selectedACTypes[0]} costs`,
-                      props.payload.category || 'Unknown'
-                    ]}
-                    contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                  />
-                </PieChart>
-              )}
+            <h4 className="font-bold text-gray-900 mb-3 text-sm">Top Items by Total AC</h4>
+            <ResponsiveContainer width="100%" height={220}>
+              <BarChart data={filteredItems.slice(0, 6)} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  type="number"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={(v) => `${currencySymbol}${(v / 1000).toFixed(0)}k`}
+                  label={{ value: 'Total AC', position: 'bottom', fontSize: 11, fontWeight: 'bold', fill: '#374151' }}
+                />
+                <YAxis
+                  dataKey="item_code"
+                  type="category"
+                  width={70}
+                  tick={{ fontSize: 10 }}
+                  label={{ value: 'Item', angle: -90, position: 'insideLeft', fontSize: 11, fontWeight: 'bold', fill: '#374151' }}
+                />
+                <Tooltip
+                  formatter={(value: number) => [`${currencySymbol}${value.toLocaleString()}`, 'Total AC']}
+                  labelFormatter={(label) => `Item: ${label}`}
+                  contentStyle={{ fontSize: 11 }}
+                />
+                <Bar dataKey="total_additional_cost" fill="#f97316" radius={[0, 4, 4, 0]} />
+              </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
       </div>
 
-      {/* Table with Detailed Breakdown - Excel-like UI with Separate AC Columns */}
+      {/* Dynamic AC Table */}
       <Card className="border-gray-300 shadow-sm">
         <CardContent className="p-0">
-          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300">
-            <h4 className="font-semibold text-gray-900 text-sm">Items with Additional Costs - Detailed Breakdown</h4>
+          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex justify-between items-center">
+            <h4 className="font-bold text-gray-900 text-sm">
+              Additional Costs Breakdown
+              {searchQuery && <span className="ml-2 text-blue-600 font-normal">- Searching: "{searchQuery}"</span>}
+            </h4>
+            <div className="text-xs text-gray-700 font-medium">
+              Showing {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredItems.length)} of {filteredItems.length} items
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead>
                 <tr className="bg-gray-100 border-b-2 border-gray-400">
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">#</th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">Item Code</th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">Item Name</th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">Category</th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300">Vendor</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">Qty</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700 border-r border-gray-300">Item Cost</th>
-                  <th className="px-3 py-2 text-right font-semibold text-orange-700 border-r border-gray-300">MOQ</th>
-                  <th className="px-3 py-2 text-right font-semibold text-orange-700 border-r border-gray-300">Testing</th>
-                  <th className="px-3 py-2 text-right font-semibold text-orange-700 border-r border-gray-300">Coating</th>
-                  <th className="px-3 py-2 text-right font-semibold text-orange-700 border-r border-gray-300">Freight</th>
-                  <th className="px-3 py-2 text-right font-semibold text-orange-700 border-r border-gray-300">Total AC</th>
-                  <th className="px-3 py-2 text-right font-semibold text-gray-700">Final Cost</th>
+                  <th className="px-2 py-2 text-left font-bold text-gray-700 border-r border-gray-300">#</th>
+                  <th className="px-2 py-2 text-left font-bold text-gray-700 border-r border-gray-300">Item Code</th>
+                  <th className="px-2 py-2 text-left font-bold text-gray-700 border-r border-gray-300">Item Name</th>
+                  <th className="px-2 py-2 text-left font-bold text-gray-700 border-r border-gray-300">Tags</th>
+                  <th className="px-2 py-2 text-left font-bold text-gray-700 border-r border-gray-300">Vendor</th>
+                  <th className="px-2 py-2 text-center font-bold text-gray-700 border-r border-gray-300">Source</th>
+                  <th className="px-2 py-2 text-right font-bold text-gray-700 border-r border-gray-300">Qty</th>
+                  <th className="px-2 py-2 text-right font-bold text-gray-700 border-r border-gray-300">Base Rate</th>
+                  <th className="px-2 py-2 text-right font-bold text-gray-700 border-r border-gray-300">Item Cost</th>
+                  {/* Dynamic AC Columns */}
+                  {dynamicACColumns.map(acType => (
+                    <th key={acType} className="px-2 py-2 text-right font-bold text-orange-700 border-r border-gray-300" title={acType}>
+                      <div className="truncate max-w-[80px]" title={acType}>
+                        {acType.length > 10 ? acType.substring(0, 10) + '...' : acType}
+                      </div>
+                      <div className="text-[9px] text-gray-500 font-normal">(Per Unit / Total)</div>
+                    </th>
+                  ))}
+                  <th className="px-2 py-2 text-right font-bold text-orange-700 border-r border-gray-300">Total AC</th>
+                  <th className="px-2 py-2 text-right font-bold text-gray-700">Final Cost</th>
                 </tr>
               </thead>
               <tbody className="bg-white">
-                {filteredItems.map((item, idx) => {
-                  // Extract individual AC amounts
-                  const moqCost = item.additionalCosts.find(ac => ac.type === 'MOQ')?.totalAmount || 0;
-                  const testingCost = item.additionalCosts.find(ac => ac.type === 'Testing')?.totalAmount || 0;
-                  const coatingCost = item.additionalCosts.find(ac => ac.type === 'Coating')?.totalAmount || 0;
-                  const freightCost = item.additionalCosts.find(ac => ac.type === 'Freight')?.totalAmount || 0;
+                {paginatedItems.map((item, idx) => {
+                  const isNearBottom = idx >= paginatedItems.length - 4;
+                  const itemCost = item.base_rate * item.quantity;
 
                   return (
-                    <tr key={item.itemCode} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="px-3 py-2 text-gray-600 border-r border-gray-200">{idx + 1}</td>
-                      <td className="px-3 py-2 font-mono font-medium text-gray-900 border-r border-gray-200">{item.itemCode}</td>
-                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-xs truncate" title={item.itemName}>
-                        {item.itemName}
+                    <tr key={`${item.item_id}-${item.bom_path}-${idx}`} className="border-b border-gray-200 hover:bg-gray-50">
+                      <td className="px-2 py-2 text-gray-600 border-r border-gray-200">
+                        {((currentPage - 1) * itemsPerPage) + idx + 1}
                       </td>
-
-                      {/* Category - Clickable */}
-                      <td className="px-3 py-2 border-r border-gray-200 group cursor-pointer" title="Click to view this category">
+                      <td className="px-2 py-2 font-mono font-medium text-gray-900 border-r border-gray-200">
+                        {item.item_code}
+                      </td>
+                      <td className="px-2 py-2 text-gray-700 border-r border-gray-200 max-w-[100px] truncate" title={item.item_name}>
+                        {item.item_name}
+                      </td>
+                      <td className="px-2 py-2 border-r border-gray-200">
+                        {renderTags(item.tags, isNearBottom)}
+                      </td>
+                      <td className="px-2 py-2 border-r border-gray-200">
                         <button
-                          onClick={() => navigateToTab('items', { selectedCategory: item.category || 'Uncategorized' })}
-                          className="text-blue-700 group-hover:text-blue-900 group-hover:underline font-medium w-full text-left"
+                          onClick={() => navigateToTab('items', { selectedVendor: item.vendor_name || undefined })}
+                          className="text-blue-700 hover:text-blue-900 hover:underline font-medium truncate max-w-[80px] block"
+                          title={item.vendor_name || 'N/A'}
                         >
-                          {item.category || 'Uncategorized'}
+                          {item.vendor_name || 'N/A'}
                         </button>
                       </td>
-
-                      {/* Vendor - Clickable */}
-                      <td className="px-3 py-2 border-r border-gray-200 group cursor-pointer" title="Click to view this vendor">
-                        <button
-                          onClick={() => navigateToTab('items', { selectedVendor: item.vendor })}
-                          className="text-blue-700 group-hover:text-blue-900 group-hover:underline font-medium w-full text-left"
+                      <td className="px-2 py-2 text-center border-r border-gray-200">
+                        <span
+                          className="inline-block px-2 py-0.5 rounded text-[10px] font-medium text-white"
+                          style={{ backgroundColor: SOURCE_COLORS[item.item_source] || '#6b7280' }}
                         >
-                          {item.vendor}
-                        </button>
+                          {SOURCE_LABELS[item.item_source] || item.item_source}
+                        </span>
                       </td>
-
-                      <td className="px-3 py-2 text-right text-gray-700 border-r border-gray-200">
+                      <td className="px-2 py-2 text-right text-gray-700 border-r border-gray-200">
                         {item.quantity} {item.unit}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono font-medium text-gray-900 border-r border-gray-200">
-                        ${item.totalCost.toLocaleString()}
+                      <td className="px-2 py-2 text-right font-mono text-gray-900 border-r border-gray-200">
+                        {currencySymbol}{item.base_rate.toLocaleString()}
                       </td>
-
-                      {/* Individual AC Columns - Clickable (Toggle) */}
-                      <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title="Click to toggle MOQ filter">
-                        {moqCost > 0 ? (
-                          <button
-                            onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, 'MOQ'))}
-                            className={`font-mono group-hover:text-orange-800 group-hover:underline font-semibold w-full text-right ${
-                              selectedACTypes.includes('MOQ') && !selectedACTypes.includes('all') ? 'text-orange-800 underline' : 'text-orange-600'
-                            }`}
-                          >
-                            ${moqCost.toLocaleString()}
-                          </button>
-                        ) : (
-                          <span className="text-gray-400">-</span>
-                        )}
+                      <td className="px-2 py-2 text-right font-mono text-gray-900 border-r border-gray-200">
+                        {currencySymbol}{itemCost.toLocaleString()}
                       </td>
-                      <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title="Click to toggle Testing filter">
-                        {testingCost > 0 ? (
-                          <button
-                            onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, 'Testing'))}
-                            className={`font-mono group-hover:text-orange-800 group-hover:underline font-semibold w-full text-right ${
-                              selectedACTypes.includes('Testing') && !selectedACTypes.includes('all') ? 'text-orange-800 underline' : 'text-orange-600'
-                            }`}
-                          >
-                            ${testingCost.toLocaleString()}
-                          </button>
-                        ) : (
-                          <span className="text-gray-400">-</span>
-                        )}
+                      {/* Dynamic AC Values */}
+                      {dynamicACColumns.map(acType => {
+                        const acValue = getACValue(item, acType);
+                        return (
+                          <td key={acType} className="px-2 py-2 text-right border-r border-gray-200">
+                            {acValue ? (
+                              <div className="relative group">
+                                <span className="font-mono text-orange-600 cursor-help">
+                                  {currencySymbol}{acValue.total.toLocaleString()}
+                                </span>
+                                <div className={`absolute z-20 hidden group-hover:block bg-white border border-gray-300 rounded shadow-lg p-2 right-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`} style={{ minWidth: '140px' }}>
+                                  <div className="text-xs font-bold text-gray-700 mb-1 border-b pb-1">{acType}</div>
+                                  <div className="text-xs text-gray-600">
+                                    <div className="flex justify-between py-0.5">
+                                      <span>Per Unit:</span>
+                                      <span className="font-mono">{currencySymbol}{acValue.perUnit.toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5">
+                                      <span>Total:</span>
+                                      <span className="font-mono font-medium">{currencySymbol}{acValue.total.toLocaleString()}</span>
+                                    </div>
+                                    <div className="flex justify-between py-0.5 text-gray-500">
+                                      <span>Type:</span>
+                                      <span>{acValue.type}</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td className="px-2 py-2 text-right font-mono font-bold text-orange-700 border-r border-gray-200">
+                        {currencySymbol}{item.total_additional_cost.toLocaleString()}
                       </td>
-                      <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title="Click to toggle Coating filter">
-                        {coatingCost > 0 ? (
-                          <button
-                            onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, 'Coating'))}
-                            className={`font-mono group-hover:text-orange-800 group-hover:underline font-semibold w-full text-right ${
-                              selectedACTypes.includes('Coating') && !selectedACTypes.includes('all') ? 'text-orange-800 underline' : 'text-orange-600'
-                            }`}
-                          >
-                            ${coatingCost.toLocaleString()}
-                          </button>
-                        ) : (
-                          <span className="text-gray-400">-</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 text-right border-r border-gray-200 group cursor-pointer" title="Click to toggle Freight filter">
-                        {freightCost > 0 ? (
-                          <button
-                            onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, 'Freight'))}
-                            className={`font-mono group-hover:text-orange-800 group-hover:underline font-semibold w-full text-right ${
-                              selectedACTypes.includes('Freight') && !selectedACTypes.includes('all') ? 'text-orange-800 underline' : 'text-orange-600'
-                            }`}
-                          >
-                            ${freightCost.toLocaleString()}
-                          </button>
-                        ) : (
-                          <span className="text-gray-400">-</span>
-                        )}
-                      </td>
-
-                      <td className="px-3 py-2 text-right font-mono font-bold text-orange-700 border-r border-gray-200">
-                        ${item.totalAC.toLocaleString()}
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono font-bold text-gray-900">
-                        ${item.finalCost.toLocaleString()}
+                      <td className="px-2 py-2 text-right font-mono font-bold text-gray-900">
+                        {currencySymbol}{item.total_amount.toLocaleString()}
                       </td>
                     </tr>
                   );
@@ -712,17 +729,44 @@ export default function AdditionalCostsView({ data, totalQuoteValue, navigationC
             </table>
           </div>
 
-          <div className="bg-gray-50 px-4 py-2 border-t border-gray-300 text-xs text-gray-600">
-            <span className="font-medium">Note:</span> Click on any AC amount to toggle that cost type filter (supports multiple). Click Category or Vendor to navigate to respective views.
-            {!selectedACTypes.includes('all') && (
-              <button onClick={() => setSelectedACTypes(['all'])} className="text-blue-700 hover:underline font-medium ml-2">
-                ← Show All AC Types
+          {/* Pagination Controls */}
+          <div className="bg-gray-50 px-4 py-3 border-t border-gray-300 flex justify-between items-center">
+            <div className="text-xs text-gray-700 font-medium">
+              Page {currentPage} of {totalPages} | {dynamicACColumns.length} AC columns shown
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
+              >
+                First
               </button>
-            )}
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
+              >
+                ← Prev
+              </button>
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
+              >
+                Next →
+              </button>
+              <button
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
+              >
+                Last
+              </button>
+            </div>
           </div>
         </CardContent>
       </Card>
-
     </div>
   );
 }
