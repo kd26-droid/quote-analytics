@@ -5,6 +5,7 @@ import ItemsTab from './tabs/ItemsTab';
 import BOMTab from './tabs/BOMTab';
 import OverallTab from './tabs/OverallTab';
 import type { TopItemsAnalytics, Category, Vendor, AdditionalCostsBreakdown, BOMCostComparison, VendorRateDeviation } from '../../types/quote.types';
+import type { CostViewData } from '../../services/api';
 
 export type TabType = 'summary' | 'items' | 'bom' | 'overall';
 
@@ -19,6 +20,7 @@ export interface NavigationContext {
 
 interface QuoteAnalyticsDashboardProps {
   data: TopItemsAnalytics;
+  costViewData?: CostViewData;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -30,6 +32,7 @@ interface QuoteAnalyticsDashboardProps {
 
 export default function QuoteAnalyticsDashboard({
   data,
+  costViewData,
   totalQuoteValue,
   totalItems,
   topCategories,
@@ -93,6 +96,7 @@ export default function QuoteAnalyticsDashboard({
         {activeTab === 'items' && (
           <ItemsTab
             data={data}
+            costViewData={costViewData}
             totalQuoteValue={totalQuoteValue}
             totalItems={totalItems}
             topCategories={topCategories}

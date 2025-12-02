@@ -11,11 +11,13 @@ import ItemSourceView from './items-views/ItemSourceView';
 import ItemVolumeAnalysisView from './items-views/ItemVolumeAnalysisView';
 import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation, BOMCostComparison } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
+import type { CostViewData } from '../../../services/api';
 
 export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'item-source' | 'volume-analysis' | 'custom';
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
+  costViewData?: CostViewData;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -28,6 +30,7 @@ interface ItemsTabProps {
 
 export default function ItemsTab({
   data,
+  costViewData,
   totalQuoteValue,
   totalItems,
   topCategories,
@@ -101,9 +104,10 @@ export default function ItemsTab({
 
       {/* View Content */}
       <div>
-        {selectedView === 'cost' && (
+        {selectedView === 'cost' && costViewData && (
           <CostView
             data={data}
+            costViewData={costViewData}
             totalQuoteValue={totalQuoteValue}
             totalItems={totalItems}
             navigationContext={navigationContext}
