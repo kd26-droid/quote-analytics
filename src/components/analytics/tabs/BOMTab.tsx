@@ -5,27 +5,42 @@ import BOMAdditionalCostsView from './bom-views/BOMAdditionalCostsView';
 import BOMVolumeAnalysisView from './bom-views/BOMVolumeAnalysisView';
 import type { TopItemsAnalytics, AdditionalCostsBreakdown, BOMCostComparison } from '../../../types/quote.types';
 import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
+import type { BOMDetailData, CostViewData } from '../../../services/api';
+import { useBOMInstances } from '../../../hooks/useBOMInstances';
 
 export type BOMViewType = 'comparison' | 'additional-costs' | 'volume-analysis';
 
 interface BOMTabProps {
   data: TopItemsAnalytics;
+  costViewData?: CostViewData;
   totalQuoteValue: number;
   bomCostComparison: BOMCostComparison[];
+  bomDetailData?: BOMDetailData | null;
   additionalCosts: AdditionalCostsBreakdown;
   navigationContext: NavigationContext;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+  filterResetKey?: number;
+  clearAllFilters?: () => void;
+  currencySymbol?: string;
 }
 
 export default function BOMTab({
   data,
+  costViewData,
   totalQuoteValue,
   bomCostComparison,
+  bomDetailData,
   additionalCosts,
   navigationContext,
-  navigateToTab
+  navigateToTab,
+  filterResetKey,
+  clearAllFilters,
+  currencySymbol = '₹'
 }: BOMTabProps) {
   const [selectedView, setSelectedView] = useState<BOMViewType>('comparison');
+
+  // Use shared hook to detect volume scenarios from costViewData
+  const { hasVolumeScenarios } = useBOMInstances(costViewData?.items || []);
 
   // Handle navigation context (e.g., when navigating from Items tab or within BOM views)
   useEffect(() => {
@@ -36,16 +51,6 @@ export default function BOMTab({
       }
     }
   }, [navigationContext, selectedView]);
-
-  // Detect if volume analysis should be shown
-  const hasVolumeScenarios = useMemo(() => {
-    const bomCodeCounts = new Map<string, number>();
-    bomCostComparison.forEach(bom => {
-      const count = bomCodeCounts.get(bom.bomCode) || 0;
-      bomCodeCounts.set(bom.bomCode, count + 1);
-    });
-    return Array.from(bomCodeCounts.values()).some(count => count > 1);
-  }, [bomCostComparison]);
 
   // Conditionally add volume analysis to views
   const views = [
@@ -90,11 +95,16 @@ export default function BOMTab({
           <BOMComparisonView
             key="comparison"
             bomCostComparison={bomCostComparison}
+            bomDetailData={bomDetailData}
+            costViewData={costViewData}
             totalQuoteValue={totalQuoteValue}
             data={data}
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
             setSelectedView={setSelectedView}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
+            currencySymbol={currencySymbol}
           />
         )}
         {selectedView === 'additional-costs' && (
@@ -102,18 +112,26 @@ export default function BOMTab({
             key="additional-costs"
             additionalCosts={additionalCosts}
             bomCostComparison={bomCostComparison}
+            bomDetailData={bomDetailData}
+            costViewData={costViewData}
             totalQuoteValue={totalQuoteValue}
             data={data}
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
+            currencySymbol={currencySymbol}
           />
         )}
-        {selectedView === 'volume-analysis' && hasVolumeScenarios && (
+        {selectedView === 'volume-analysis' && hasVolumeScenarios && costViewData && (
           <BOMVolumeAnalysisView
-            bomCostComparison={bomCostComparison}
-            data={data}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
+            navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
       </div>

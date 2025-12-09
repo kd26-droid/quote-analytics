@@ -4,6 +4,8 @@ import { Card, CardContent } from '../../../ui/card';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from 'recharts';
 import type { TopItemsAnalytics } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
+import { useBOMInstances } from '../../../../hooks/useBOMInstances';
+import BOMInstanceFilter, { BOMInstanceFilterPills, getBOMInstanceFilterText } from '../../shared/BOMInstanceFilter';
 
 interface ItemSourceViewProps {
   data: TopItemsAnalytics;
@@ -29,6 +31,7 @@ interface ItemWithSource {
   bomPath: string;
   category: string;
   vendor: string;
+  bom_instance_id: string;
 }
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444'];
@@ -44,6 +47,7 @@ export default function ItemSourceView({
   navigationContext,
   navigateToTab
 }: ItemSourceViewProps) {
+  const [selectedBOMInstances, setSelectedBOMInstances] = useState<string[]>(['all']);
   const [selectedSources, setSelectedSources] = useState<string[]>(['all']);
   const [selectedStatus, setSelectedStatus] = useState<StatusType | 'All'>('All');
   const [filtersExpanded, setFiltersExpanded] = useState(false);
@@ -99,7 +103,8 @@ export default function ItemSourceView({
         currentStatus: 'Present',
         bomPath: item.bomPath,
         category: item.category,
-        vendor: item.vendor
+        vendor: item.vendor,
+        bom_instance_id: item.bom_instance_id || 'default'
       });
     });
 
@@ -162,16 +167,29 @@ export default function ItemSourceView({
         removalReason: ['Cost too high', 'Not needed', 'Vendor unavailable', 'Replaced with alternative', 'Out of stock', 'Lead time too long', 'Specification changed'][Math.floor(Math.random() * 7)],
         bomPath: templateItem.bomPath,
         category: templateItem.category,
-        vendor: templateItem.vendor
+        vendor: templateItem.vendor,
+        bom_instance_id: templateItem.bom_instance_id || 'default'
       });
     }
 
     return items;
   }, [data]);
 
+  // Use shared BOM instances hook for volume scenario detection
+  const { bomInstances, hasVolumeScenarios, filterByInstance } = useBOMInstances(itemsWithSource);
+
   // Filter items
   const filteredItems = useMemo(() => {
-    return itemsWithSource.filter(item => {
+    let result = itemsWithSource;
+
+    // Apply BOM Instance filter (for volume scenarios)
+    if (!selectedBOMInstances.includes('all')) {
+      result = result.filter(item =>
+        selectedBOMInstances.includes(item.bom_instance_id)
+      );
+    }
+
+    return result.filter(item => {
       // Source filter - filter by ORIGIN SOURCE (first stage in pipeline)
       if (!selectedSources.includes('all')) {
         const originSource = item.pipeline[0]; // First stage = origin
@@ -185,7 +203,7 @@ export default function ItemSourceView({
 
       return true;
     });
-  }, [itemsWithSource, selectedSources, selectedStatus]);
+  }, [itemsWithSource, selectedBOMInstances, selectedSources, selectedStatus]);
 
   // Calculate insights
   const insights = useMemo(() => {
@@ -350,6 +368,14 @@ export default function ItemSourceView({
                 Showing: {filteredItems.length} items
               </span>
 
+              {hasVolumeScenarios && (
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-gray-600">
+                    {getBOMInstanceFilterText(selectedBOMInstances, bomInstances)}
+                  </span>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold text-gray-600">
                   Sources: {selectedSources.includes('all') ? 'All' : selectedSources.join(', ')}
@@ -370,15 +396,16 @@ export default function ItemSourceView({
                 {filtersExpanded ? '▲ Less' : '▼ More Filters'}
               </button>
 
-              {(!selectedSources.includes('all') || selectedStatus !== 'All') && (
+              {(!selectedBOMInstances.includes('all') || !selectedSources.includes('all') || selectedStatus !== 'All') && (
                 <button
                   onClick={() => {
+                    setSelectedBOMInstances(['all']);
                     setSelectedSources(['all']);
                     setSelectedStatus('All');
                   }}
                   className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
                 >
-                  🔄 Reset
+                  Reset
                 </button>
               )}
             </div>
@@ -386,6 +413,14 @@ export default function ItemSourceView({
             {/* Advanced Filters */}
             {filtersExpanded && (
               <div className="pt-3 border-t border-gray-200 space-y-3">
+                {/* BOM Instance Filter */}
+                <BOMInstanceFilter
+                  bomInstances={bomInstances}
+                  selectedInstances={selectedBOMInstances}
+                  onSelectionChange={setSelectedBOMInstances}
+                  hasVolumeScenarios={hasVolumeScenarios}
+                />
+
                 {/* Source Filter - Multi-select */}
                 <div>
                   <div className="text-xs font-semibold text-gray-700 mb-2">Filter by Source:</div>
@@ -448,6 +483,17 @@ export default function ItemSourceView({
           </div>
         </CardContent>
       </Card>
+
+      {/* Active Filter Pills */}
+      <BOMInstanceFilterPills
+        selectedInstances={selectedBOMInstances}
+        bomInstances={bomInstances}
+        onRemove={(instanceId) => {
+          const newSelection = selectedBOMInstances.filter(id => id !== instanceId);
+          setSelectedBOMInstances(newSelection.length === 0 ? ['all'] : newSelection);
+        }}
+        onClear={() => setSelectedBOMInstances(['all'])}
+      />
 
       {/* Summary Cards - Clickable to filter */}
       <div className="grid grid-cols-3 gap-4">

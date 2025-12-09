@@ -1,23 +1,22 @@
 import { useState } from 'react';
 import { Card, CardContent } from '../../ui/card';
 import OverallAdditionalCostsView from './overall-views/OverallAdditionalCostsView';
-import type { Category, Vendor, AdditionalCostsBreakdown, VendorRateDeviation } from '../../../types/quote.types';
-import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
+import type { OverallACData } from '../../../services/api';
 
 export type OverallViewType = 'additional-costs';
 
 interface OverallTabProps {
-  totalQuoteValue: number;
-  topVendors: Vendor[];
-  topCategories: Category[];
-  additionalCosts: AdditionalCostsBreakdown;
-  vendorRateDeviation: VendorRateDeviation;
-  navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+  overallACData?: OverallACData | null;
+  currencySymbol?: string;
+  filterResetKey?: number;
+  onClearAllFilters?: () => void;
 }
 
 export default function OverallTab({
-  totalQuoteValue,
-  additionalCosts
+  overallACData,
+  currencySymbol = '₹',
+  filterResetKey,
+  onClearAllFilters
 }: OverallTabProps) {
   const [selectedView, setSelectedView] = useState<OverallViewType>('additional-costs');
 
@@ -56,8 +55,10 @@ export default function OverallTab({
       <div>
         {selectedView === 'additional-costs' && (
           <OverallAdditionalCostsView
-            additionalCosts={additionalCosts}
-            totalQuoteValue={totalQuoteValue}
+            overallACData={overallACData}
+            currencySymbol={currencySymbol}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={onClearAllFilters}
           />
         )}
       </div>

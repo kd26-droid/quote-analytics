@@ -1,10 +1,12 @@
 import { useState, useMemo, useEffect } from 'react';
+import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { Badge } from '../../../ui/badge';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import type { TopItemsAnalytics, VendorRateDeviation } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import type { CostViewData } from '../../../../services/api';
+import { useBOMInstances } from '../../../../hooks/useBOMInstances';
+import BOMInstanceFilter, { BOMInstanceFilterPills, getBOMInstanceFilterText } from '../../shared/BOMInstanceFilter';
 
 interface RateViewProps {
   data: TopItemsAnalytics;
@@ -14,6 +16,8 @@ interface RateViewProps {
   vendorRateDeviation: VendorRateDeviation;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
   navigationContext?: NavigationContext;
+  filterResetKey?: number;
+  onClearAllFilters?: () => void;
 }
 
 // Currency code to symbol mapping
@@ -37,23 +41,58 @@ const getCurrencySymbol = (code: string | null | undefined): string => {
   return CURRENCY_SYMBOLS[code.toUpperCase()] || code + ' ';
 };
 
-export default function RateView({ costViewData, currencySymbol = '₹', totalQuoteValue, navigateToTab, navigationContext }: RateViewProps) {
-  // Pagination
-  const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 10;
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
-  // Search and filters
+export default function RateView({ costViewData, currencySymbol = '₹', totalQuoteValue, navigateToTab, navigationContext, filterResetKey, onClearAllFilters }: RateViewProps) {
+  // Core state
+  const [selectedItem, setSelectedItem] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Filters
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedBOMInstances, setSelectedBOMInstances] = useState<string[]>(['all']);
   const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
   const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
   const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
-  const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const [sortBy, setSortBy] = useState<'markup' | 'total' | 'rate'>('total');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // UI state
+  const [chartViewMode, setChartViewMode] = useState<'markup' | 'rates'>('rates');
+  const [sortColumn, setSortColumn] = useState<string>('item_total');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [openDropdown, setOpenDropdown] = useState<'bom' | 'vendor' | 'category' | 'columns' | null>(null);
+  const [bomSearch, setBomSearch] = useState('');
+  const [vendorSearch, setVendorSearch] = useState('');
+  const [categorySearch, setCategorySearch] = useState('');
+  const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
+
+  // Column visibility
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
+    'item_code', 'item_name', 'vendor_name', 'quantity', 'vendor_rate', 'base_rate', 'markup', 'ac_per_unit', 'quoted_rate', 'item_total', 'percent_of_quote'
+  ]));
+
+  // Column definitions with renamed labels
+  const columnDefs = [
+    { key: 'item_code', label: 'Item Code', align: 'left' },
+    { key: 'item_name', label: 'Item Name', align: 'left' },
+    { key: 'vendor_name', label: 'Vendor', align: 'left' },
+    { key: 'bom_path', label: 'BOM', align: 'left' },
+    { key: 'quantity', label: 'Qty', align: 'right' },
+    { key: 'vendor_rate', label: 'Vendor Base Rate', align: 'right' },
+    { key: 'base_rate', label: 'Buyer Base Rate', align: 'right' },
+    { key: 'markup', label: 'Markup %', align: 'center' },
+    { key: 'ac_per_unit', label: 'AC/Unit', align: 'right' },
+    { key: 'quoted_rate', label: 'Landed Rate', align: 'right' },
+    { key: 'item_total', label: 'Total', align: 'right' },
+    { key: 'percent_of_quote', label: '% Quote', align: 'right' },
+  ];
 
   // Get items from costViewData
   const items = costViewData?.items || [];
   const filters = costViewData?.filters;
+
+  // Use shared BOM instances hook for volume scenario detection
+  const { bomInstances, hasVolumeScenarios, filterByInstance } = useBOMInstances(items);
 
   // Auto-select from navigation context
   useEffect(() => {
@@ -65,7 +104,19 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, selectedBOMs, selectedVendors, selectedCategories, sortBy, sortOrder]);
+  }, [searchQuery, selectedBOMInstances, selectedBOMs, selectedVendors, selectedCategories, selectedItem]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.filter-dropdown')) {
+        setOpenDropdown(null);
+      }
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
   // Helper function to toggle multi-select
   const toggleSelection = (current: string[], value: string) => {
@@ -108,6 +159,120 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
     return { uniqueBOMs: sortedBOMs, rootBOMCount: rootBOMs.size };
   }, [items]);
 
+  // Build BOM hierarchy tree for filter dropdown
+  interface BOMNode {
+    code: string;
+    fullPath: string;
+    children: BOMNode[];
+  }
+
+  const bomHierarchy = useMemo(() => {
+    const roots: BOMNode[] = [];
+    const nodeMap = new Map<string, BOMNode>();
+
+    const sortedBOMs = [...uniqueBOMs].sort((a, b) => {
+      const depthA = a.split(' > ').length;
+      const depthB = b.split(' > ').length;
+      return depthA - depthB;
+    });
+
+    sortedBOMs.forEach(bomPath => {
+      const parts = bomPath.split(' > ');
+      const code = parts[parts.length - 1];
+      const node: BOMNode = { code, fullPath: bomPath, children: [] };
+      nodeMap.set(bomPath, node);
+
+      if (parts.length === 1) {
+        roots.push(node);
+      } else {
+        const parentPath = parts.slice(0, -1).join(' > ');
+        const parent = nodeMap.get(parentPath);
+        if (parent) {
+          parent.children.push(node);
+        } else {
+          roots.push(node);
+        }
+      }
+    });
+
+    return roots;
+  }, [uniqueBOMs]);
+
+  // Render BOM tree for dropdown
+  const renderBOMTree = (nodes: BOMNode[], depth = 0): React.ReactNode => {
+    return nodes.map(node => {
+      const hasChildren = node.children.length > 0;
+      const isExpanded = expandedBOMs.has(node.fullPath);
+      const isSelected = selectedBOMs.includes(node.fullPath);
+      const matchesSearch = !bomSearch.trim() ||
+        node.code.toLowerCase().includes(bomSearch.toLowerCase()) ||
+        node.fullPath.toLowerCase().includes(bomSearch.toLowerCase());
+
+      if (bomSearch.trim() && !matchesSearch) {
+        const childrenMatch = node.children.some(child =>
+          child.code.toLowerCase().includes(bomSearch.toLowerCase()) ||
+          child.fullPath.toLowerCase().includes(bomSearch.toLowerCase())
+        );
+        if (!childrenMatch) return null;
+      }
+
+      return (
+        <div key={node.fullPath}>
+          <div
+            className={`flex items-center gap-1 py-1.5 px-2 hover:bg-gray-100 rounded cursor-pointer ${
+              isSelected ? 'bg-blue-50' : ''
+            }`}
+            style={{ paddingLeft: `${8 + depth * 16}px` }}
+          >
+            {hasChildren ? (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpandedBOMs(prev => {
+                    const next = new Set(prev);
+                    if (next.has(node.fullPath)) {
+                      next.delete(node.fullPath);
+                    } else {
+                      next.add(node.fullPath);
+                    }
+                    return next;
+                  });
+                }}
+                className="w-4 h-4 flex items-center justify-center text-gray-500 hover:text-gray-700"
+              >
+                {isExpanded ? '▼' : '▶'}
+              </button>
+            ) : (
+              <span className="w-4" />
+            )}
+            <label className="flex items-center gap-2 flex-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, node.fullPath))}
+                className="rounded border-gray-300"
+              />
+              <span className={`text-sm ${depth === 0 ? 'font-medium text-gray-900' : 'text-gray-700'}`}>
+                {node.code}
+              </span>
+            </label>
+          </div>
+          {hasChildren && isExpanded && renderBOMTree(node.children, depth + 1)}
+        </div>
+      );
+    });
+  };
+
+  // Get unique vendors
+  const uniqueVendors = useMemo(() => {
+    return filters?.vendor_list || [];
+  }, [filters]);
+
+  // Get unique categories
+  const uniqueCategories = useMemo(() => {
+    return filters?.tag_list || [];
+  }, [filters]);
+
   // Calculate rates for each item
   const itemRates = useMemo(() => {
     return items.map(item => {
@@ -130,6 +295,7 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
         item_name: item.item_name,
         quantity: item.quantity,
         unit: item.unit,
+        vendor_id: item.vendor_id,
         vendor_name: item.vendor_name,
         vendor_currency_code: item.vendor_currency || 'INR',
         vendor_currency_symbol: vendorCurrencySymbol || currencySymbol,
@@ -147,8 +313,8 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
     });
   }, [items, currencySymbol]);
 
-  // Apply filters
-  const filteredItems = useMemo(() => {
+  // Apply filters (without selectedItem for charts)
+  const baseFilteredItems = useMemo(() => {
     let result = [...itemRates];
 
     // Search filter
@@ -157,6 +323,13 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
       result = result.filter(item =>
         item.item_code.toLowerCase().includes(query) ||
         item.item_name.toLowerCase().includes(query)
+      );
+    }
+
+    // Apply BOM Instance filter (for volume scenarios)
+    if (!selectedBOMInstances.includes('all')) {
+      result = result.filter(item =>
+        selectedBOMInstances.includes(item.bom_instance_id)
       );
     }
 
@@ -172,7 +345,7 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
     // Vendor filter
     if (!selectedVendors.includes('all')) {
       result = result.filter(item =>
-        item.vendor_name && selectedVendors.includes(item.vendor_name)
+        item.vendor_id && selectedVendors.includes(item.vendor_id)
       );
     }
 
@@ -183,425 +356,761 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
       );
     }
 
+    return result;
+  }, [itemRates, searchQuery, selectedBOMInstances, selectedBOMs, selectedVendors, selectedCategories]);
+
+  // Apply selectedItem filter for table
+  const filteredItems = useMemo(() => {
+    let result = baseFilteredItems;
+
+    // Apply item selection from chart
+    if (selectedItem) {
+      result = result.filter(item => item.item_code === selectedItem);
+    }
+
     // Sort
     result.sort((a, b) => {
-      let aVal = 0, bVal = 0;
-      if (sortBy === 'markup') {
-        aVal = a.markup;
-        bVal = b.markup;
-      } else if (sortBy === 'total') {
-        aVal = a.item_total;
-        bVal = b.item_total;
-      } else if (sortBy === 'rate') {
-        aVal = a.quoted_rate;
-        bVal = b.quoted_rate;
+      let aVal: any = a[sortColumn as keyof typeof a];
+      let bVal: any = b[sortColumn as keyof typeof b];
+
+      if (typeof aVal === 'string') {
+        return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
       }
-      return sortOrder === 'desc' ? bVal - aVal : aVal - bVal;
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     });
 
     return result;
-  }, [itemRates, searchQuery, selectedBOMs, selectedVendors, selectedCategories, sortBy, sortOrder]);
+  }, [baseFilteredItems, selectedItem, sortColumn, sortDirection]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const totalPages = Math.ceil(filteredItems.length / pageSize);
   const paginatedItems = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    return filteredItems.slice(start, start + itemsPerPage);
-  }, [filteredItems, currentPage, itemsPerPage]);
+    const start = (currentPage - 1) * pageSize;
+    return filteredItems.slice(start, start + pageSize);
+  }, [filteredItems, currentPage, pageSize]);
 
-  // Key insights from filtered items
+  // Key insights from base filtered items (for charts)
   const insights = useMemo(() => {
-    if (filteredItems.length === 0) {
-      return { avgMarkup: 0, highestMarkup: 0, lowestMarkup: 0, totalAC: 0, totalValue: 0 };
+    if (baseFilteredItems.length === 0) {
+      return { avgMarkup: 0, highestMarkup: 0, lowestMarkup: 0, totalAC: 0, totalValue: 0, itemCount: 0 };
     }
 
-    const avgMarkup = filteredItems.reduce((sum, item) => sum + item.markup, 0) / filteredItems.length;
-    const highestMarkup = Math.max(...filteredItems.map(i => i.markup));
-    const lowestMarkup = Math.min(...filteredItems.map(i => i.markup));
-    const totalAC = filteredItems.reduce((sum, item) => sum + item.total_ac, 0);
-    const totalValue = filteredItems.reduce((sum, item) => sum + item.item_total, 0);
+    const avgMarkup = baseFilteredItems.reduce((sum, item) => sum + item.markup, 0) / baseFilteredItems.length;
+    const highestMarkup = Math.max(...baseFilteredItems.map(i => i.markup));
+    const lowestMarkup = Math.min(...baseFilteredItems.map(i => i.markup));
+    const totalAC = baseFilteredItems.reduce((sum, item) => sum + item.total_ac, 0);
+    const totalValue = baseFilteredItems.reduce((sum, item) => sum + item.item_total, 0);
 
-    return { avgMarkup, highestMarkup, lowestMarkup, totalAC, totalValue };
-  }, [filteredItems]);
+    return { avgMarkup, highestMarkup, lowestMarkup, totalAC, totalValue, itemCount: baseFilteredItems.length };
+  }, [baseFilteredItems]);
 
-  // Chart data - show top 10 by current sort, or filtered items if less than 10
-  // Each item+vendor combination is unique
+  // Chart data - top items by total amount or markup (from base filtered, not selectedItem filtered)
   const chartData = useMemo(() => {
-    const dataToShow = filteredItems.slice(0, 10);
-    return dataToShow.map((item, idx) => {
-      // Create unique display name: ItemCode (Vendor short name)
-      const vendorShort = item.vendor_name ? item.vendor_name.split(' ')[0] : 'N/A';
-      const itemCodeShort = item.item_code.length > 6 ? item.item_code.substring(0, 6) + '..' : item.item_code;
-      const displayName = `${itemCodeShort} (${vendorShort})`;
-
-      return {
-        name: displayName,
-        fullName: item.item_code,
-        itemName: item.item_name,
-        vendorName: item.vendor_name || 'N/A',
-        vendorCurrency: item.vendor_currency_symbol,
-        'Vendor Rate': item.vendor_rate,
-        'Base Rate': item.base_rate,
-        'Quoted Rate': item.quoted_rate,
-        markup: item.markup,
-        uniqueKey: `${item.item_code}-${item.vendor_name}-${idx}`
-      };
+    const sorted = [...baseFilteredItems].sort((a, b) => {
+      if (chartViewMode === 'markup') return b.markup - a.markup;
+      return b.item_total - a.item_total;
     });
-  }, [filteredItems]);
+    return sorted.slice(0, 8);
+  }, [baseFilteredItems, chartViewMode]);
 
-  // Get unique vendors
-  const uniqueVendors = useMemo(() => {
-    const vendors = new Set<string>();
-    items.forEach(item => {
-      if (item.vendor_name) vendors.add(item.vendor_name);
+  // Check if any filters are active
+  const hasActiveFilters = !selectedBOMInstances.includes('all') || !selectedBOMs.includes('all') || !selectedVendors.includes('all') ||
+    !selectedCategories.includes('all') || searchQuery.trim() !== '' || selectedItem !== null;
+
+  // Clear all filters
+  // Global filter reset - responds to filterResetKey from parent
+  useEffect(() => {
+    if (filterResetKey !== undefined && filterResetKey > 0) {
+      setSelectedBOMInstances(['all']);
+      setSelectedBOMs(['all']);
+      setSelectedVendors(['all']);
+      setSelectedCategories(['all']);
+      setSearchQuery('');
+      setSelectedItem(null);
+      setCurrentPage(1);
+    }
+  }, [filterResetKey]);
+
+  const clearAllFilters = () => {
+    setSelectedBOMInstances(['all']);
+    setSelectedBOMs(['all']);
+    setSelectedVendors(['all']);
+    setSelectedCategories(['all']);
+    setSearchQuery('');
+    setSelectedItem(null);
+    setCurrentPage(1);
+    // Trigger global reset
+    if (onClearAllFilters) {
+      onClearAllFilters();
+    }
+  };
+
+  // Filtered dropdown lists
+  const filteredBOMList = useMemo(() => {
+    if (!bomSearch.trim()) return uniqueBOMs;
+    return uniqueBOMs.filter(b => b.toLowerCase().includes(bomSearch.toLowerCase()));
+  }, [uniqueBOMs, bomSearch]);
+
+  const filteredVendorList = useMemo(() => {
+    if (!vendorSearch.trim()) return uniqueVendors;
+    return uniqueVendors.filter(v =>
+      v.vendor_name.toLowerCase().includes(vendorSearch.toLowerCase())
+    );
+  }, [uniqueVendors, vendorSearch]);
+
+  const filteredCategoryList = useMemo(() => {
+    if (!categorySearch.trim()) return uniqueCategories;
+    return uniqueCategories.filter(c =>
+      c.toLowerCase().includes(categorySearch.toLowerCase())
+    );
+  }, [uniqueCategories, categorySearch]);
+
+  // Handle sort
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('desc');
+    }
+  };
+
+  // Toggle column visibility
+  const toggleColumn = (key: string) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        if (next.size > 1) next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
     });
-    return Array.from(vendors);
-  }, [items]);
-
-  // Get unique categories
-  const uniqueCategories = useMemo(() => {
-    return filters?.tag_list || [];
-  }, [filters]);
+  };
 
   return (
     <div className="space-y-4">
-      {/* Search and Filters Bar */}
-      <Card className="border-gray-200">
-        <CardContent className="p-3">
-          <div className="flex items-center gap-4 flex-wrap">
-            {/* Search */}
-            <div className="flex items-center gap-2 flex-1 min-w-[250px]">
-              <span className="text-xs font-bold text-gray-800">🔍</span>
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by item code or name..."
-                className="flex-1 px-3 py-1.5 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
 
-            {/* Sort Options */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-gray-800">Sort:</span>
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value as 'markup' | 'total' | 'rate')}
-                className="px-2 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="total">Total Amount</option>
-                <option value="markup">Markup %</option>
-                <option value="rate">Quoted Rate</option>
-              </select>
+      {/* Sticky Filter Alert Bar */}
+      {hasActiveFilters && (
+        <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4 flex items-center justify-between sticky top-0 z-30 shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
+              <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+            </div>
+            <div>
+              <p className="font-bold text-orange-800">Filters Active</p>
+              <p className="text-sm text-orange-600">
+                Showing {filteredItems.length} of {itemRates.length} items
+                {selectedItem && ` • Item: ${selectedItem}`}
+                {!selectedBOMInstances.includes('all') && ` • ${getBOMInstanceFilterText(selectedBOMInstances, bomInstances)}`}
+                {!selectedBOMs.includes('all') && ` • BOM: ${selectedBOMs.map(b => b.split(' > ').pop()).join(', ')}`}
+                {!selectedVendors.includes('all') && ` • Vendor: ${selectedVendors.map(vId => uniqueVendors.find(v => v.vendor_id === vId)?.vendor_name || vId).join(', ')}`}
+                {!selectedCategories.includes('all') && ` • Category: ${selectedCategories.join(', ')}`}
+                {searchQuery && ` • Search: "${searchQuery}"`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            {selectedItem && (
               <button
-                onClick={() => setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')}
-                className="px-2 py-1 border border-gray-300 rounded text-xs hover:bg-gray-100"
-                title={sortOrder === 'desc' ? 'Highest First' : 'Lowest First'}
+                onClick={() => setSelectedItem(null)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
-                {sortOrder === 'desc' ? '↓ High' : '↑ Low'}
-              </button>
-            </div>
-
-            {/* Filter Summary */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-600">
-                {!selectedBOMs.includes('all') && `BOMs: ${selectedBOMs.length}`}
-                {!selectedVendors.includes('all') && ` | Vendors: ${selectedVendors.length}`}
-                {!selectedCategories.includes('all') && ` | Categories: ${selectedCategories.length}`}
-              </span>
-            </div>
-
-            {/* More Filters Toggle */}
-            <button
-              onClick={() => setFiltersExpanded(!filtersExpanded)}
-              className="ml-auto px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded transition-colors"
-            >
-              {filtersExpanded ? '▲ Less' : '▼ More Filters'}
-            </button>
-
-            {/* Reset */}
-            {(searchQuery || !selectedBOMs.includes('all') || !selectedVendors.includes('all') || !selectedCategories.includes('all')) && (
-              <button
-                onClick={() => {
-                  setSearchQuery('');
-                  setSelectedBOMs(['all']);
-                  setSelectedVendors(['all']);
-                  setSelectedCategories(['all']);
-                  setSortBy('total');
-                  setSortOrder('desc');
-                }}
-                className="px-3 py-1 text-xs bg-red-100 hover:bg-red-200 text-red-700 rounded transition-colors"
-              >
-                Reset
+                ← Back to All Items
               </button>
             )}
+            <button
+              onClick={clearAllFilters}
+              className="px-6 py-2.5 text-base font-bold text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors shadow-md"
+            >
+              Reset All Filters
+            </button>
           </div>
+        </div>
+      )}
 
-          {/* Expanded Filters */}
-          {filtersExpanded && (
-            <div className="mt-3 pt-3 border-t grid grid-cols-3 gap-4">
-              {/* BOMs - Grouped */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-gray-800 block">BOMs ({rootBOMCount}):</span>
-                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
-                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
-                    <input
-                      type="checkbox"
-                      checked={selectedBOMs.includes('all')}
-                      onChange={() => setSelectedBOMs(['all'])}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="text-gray-700 font-medium">All BOMs</span>
-                  </label>
-                  {(() => {
-                    const rootBOMsList = uniqueBOMs.filter(bom => !bom.includes(' > '));
-                    return rootBOMsList.map(rootBom => {
-                      const childBOMs = uniqueBOMs.filter(bom => bom.startsWith(rootBom + ' > '));
-                      const hasChildren = childBOMs.length > 0;
-                      const isRootSelected = selectedBOMs.includes(rootBom);
-                      const hasSelectedChildren = childBOMs.some(child => selectedBOMs.includes(child));
-
-                      return (
-                        <div key={rootBom} className="border border-gray-200 rounded mb-1">
-                          <div className="flex items-center gap-2 p-1.5 bg-gray-50 hover:bg-gray-100 rounded-t">
-                            <input
-                              type="checkbox"
-                              checked={isRootSelected}
-                              onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, rootBom))}
-                              className="rounded border-gray-300"
-                            />
-                            <span className="text-xs font-medium text-gray-800 flex-1">{rootBom}</span>
-                            {hasChildren && (
-                              <span className="text-[10px] text-gray-500 bg-gray-200 px-1.5 py-0.5 rounded">
-                                {childBOMs.length} sub
-                              </span>
-                            )}
-                          </div>
-                          {hasChildren && (isRootSelected || hasSelectedChildren || selectedBOMs.includes('all')) && (
-                            <div className="pl-4 py-1 border-t border-gray-100 bg-white">
-                              {childBOMs.map(child => {
-                                const depth = child.split(' > ').length - 1;
-                                const displayName = child.split(' > ').pop() || child;
-                                return (
-                                  <label key={child} className="flex items-center gap-2 cursor-pointer text-xs py-0.5 hover:bg-gray-50 rounded" style={{ paddingLeft: `${(depth - 1) * 10}px` }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedBOMs.includes(child)}
-                                      onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, child))}
-                                      className="rounded border-gray-300"
-                                    />
-                                    <span className="text-gray-600">{depth > 1 ? `└ ${displayName}` : displayName}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </div>
-
-              {/* Vendors */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-gray-800 block">Vendors:</span>
-                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
-                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
-                    <input
-                      type="checkbox"
-                      checked={selectedVendors.includes('all')}
-                      onChange={() => setSelectedVendors(['all'])}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="text-gray-700 font-medium">All Vendors</span>
-                  </label>
-                  {uniqueVendors.slice(0, 10).map(vendor => (
-                    <label key={vendor} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
-                      <input
-                        type="checkbox"
-                        checked={selectedVendors.includes(vendor)}
-                        onChange={() => setSelectedVendors(toggleSelection(selectedVendors, vendor))}
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-gray-600 truncate">{vendor}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Categories */}
-              <div className="space-y-2">
-                <span className="text-xs font-bold text-gray-800 block">Categories:</span>
-                <div className="space-y-1 max-h-40 overflow-y-auto pr-2">
-                  <label className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
-                    <input
-                      type="checkbox"
-                      checked={selectedCategories.includes('all')}
-                      onChange={() => setSelectedCategories(['all'])}
-                      className="rounded border-gray-300"
-                    />
-                    <span className="text-gray-700 font-medium">All Categories</span>
-                  </label>
-                  {uniqueCategories.slice(0, 10).map(cat => (
-                    <label key={cat} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-gray-50 p-1 rounded">
-                      <input
-                        type="checkbox"
-                        checked={selectedCategories.includes(cat)}
-                        onChange={() => setSelectedCategories(toggleSelection(selectedCategories, cat))}
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-gray-600 truncate">{cat}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
+      {/* Key Metrics Cards - 4 cards */}
+      <div className="grid grid-cols-4 gap-4">
+        <Card className="border-gray-200">
+          <CardContent className="p-5">
+            <div className="text-sm font-bold text-gray-700 mb-2">Total Items</div>
+            <div className="text-3xl font-bold text-blue-600">{insights.itemCount}</div>
+            <div className="text-sm font-medium text-gray-700 mt-2">
+              {currencySymbol}{insights.totalValue.toLocaleString()} total
             </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Key Insights */}
-      <div className="grid grid-cols-5 gap-3">
-        <Card className="border-gray-200">
-          <CardContent className="p-3">
-            <div className="text-xs font-bold text-gray-800 mb-1">Filtered Items</div>
-            <div className="text-2xl font-bold text-blue-600">{filteredItems.length}</div>
-            <div className="text-xs font-bold text-gray-700 mt-1">of {itemRates.length} total</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-3">
-            <div className="text-xs font-bold text-gray-800 mb-1">Avg Markup</div>
-            <div className="text-2xl font-bold text-green-600">{insights.avgMarkup.toFixed(1)}%</div>
-            <div className="text-xs font-bold text-gray-700 mt-1">vendor → base</div>
+          <CardContent className="p-5">
+            <div className="text-sm font-bold text-gray-700 mb-2">Avg Markup</div>
+            <div className="text-3xl font-bold text-green-600">{insights.avgMarkup.toFixed(1)}%</div>
+            <div className="text-sm font-medium text-gray-700 mt-2">vendor → buyer base</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-3">
-            <div className="text-xs font-bold text-gray-800 mb-1">Markup Range</div>
-            <div className="text-lg font-bold text-purple-600">
+          <CardContent className="p-5">
+            <div className="text-sm font-bold text-gray-700 mb-2">Markup Range</div>
+            <div className="text-2xl font-bold text-purple-600">
               {insights.lowestMarkup.toFixed(0)}% - {insights.highestMarkup.toFixed(0)}%
             </div>
-            <div className="text-xs font-bold text-gray-700 mt-1">min to max</div>
+            <div className="text-sm font-medium text-gray-700 mt-2">min to max</div>
           </CardContent>
         </Card>
 
         <Card className="border-gray-200">
-          <CardContent className="p-3">
-            <div className="text-xs font-bold text-gray-800 mb-1">Total AC</div>
-            <div className="text-2xl font-bold text-orange-600">
-              {currencySymbol}{(insights.totalAC / 1000).toFixed(0)}k
+          <CardContent className="p-5">
+            <div className="text-sm font-bold text-gray-700 mb-2">Total Additional Costs</div>
+            <div className="text-3xl font-bold text-orange-600">
+              {currencySymbol}{insights.totalAC.toLocaleString()}
             </div>
-            <div className="text-xs font-bold text-gray-700 mt-1">additional costs</div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-gray-200">
-          <CardContent className="p-3">
-            <div className="text-xs font-bold text-gray-800 mb-1">Filtered Value</div>
-            <div className="text-2xl font-bold text-indigo-600">
-              {currencySymbol}{(insights.totalValue / 1000).toFixed(0)}k
-            </div>
-            <div className="text-xs font-bold text-gray-700 mt-1">
-              {((insights.totalValue / totalQuoteValue) * 100).toFixed(1)}% of quote
+            <div className="text-sm font-medium text-gray-700 mt-2">
+              {((insights.totalAC / insights.totalValue) * 100).toFixed(1)}% of value
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Rate Comparison Chart */}
-      <Card className="border-gray-200">
-        <CardContent className="p-4">
-          <div className="flex justify-between items-center mb-3">
-            <div>
-              <h4 className="font-bold text-gray-900 text-sm">Rate Comparison: Vendor → Base → Quoted</h4>
-              <p className="text-xs text-gray-600">
-                Showing top {Math.min(10, filteredItems.length)} items by {sortBy === 'markup' ? 'markup %' : sortBy === 'total' ? 'total amount' : 'quoted rate'}
+      {/* Charts Section */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-base font-bold text-gray-800">Rate Analysis</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              Compare Vendor Base Rate, Buyer Base Rate, and Landed Rate
+            </p>
+            {hasActiveFilters && (
+              <p className="text-sm text-orange-600 font-medium mt-1">
+                Showing {baseFilteredItems.length} filtered items
               </p>
-            </div>
+            )}
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={chartData} margin={{ top: 10, right: 20, left: 10, bottom: 60 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis
-                dataKey="name"
-                tick={{ fontSize: 10, fill: '#374151' }}
-                angle={-45}
-                textAnchor="end"
-                height={80}
-                interval={0}
-                label={{ value: 'Item Code', position: 'bottom', offset: 45, fontSize: 11, fontWeight: 'bold', fill: '#374151' }}
+          <div className="flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+            <button
+              onClick={() => setChartViewMode('rates')}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                chartViewMode === 'rates'
+                  ? 'bg-white text-blue-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              By Total Value
+            </button>
+            <button
+              onClick={() => setChartViewMode('markup')}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                chartViewMode === 'markup'
+                  ? 'bg-white text-blue-700 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              By Markup %
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          {/* Left Chart - Top Items by Value/Markup */}
+          <Card className="border-gray-200">
+            <CardContent className="p-5">
+              <h4 className="font-bold text-gray-900 mb-1 text-lg">
+                Top 10 Items {chartViewMode === 'markup' ? 'by Markup %' : 'by Total Value'}
+              </h4>
+              <p className="text-sm text-gray-600 mb-4">
+                Click any item to filter the table below
+              </p>
+
+              <div className="space-y-2">
+                {chartData.slice(0, 10).map((item, index) => {
+                  const maxVal = chartData[0] ? (chartViewMode === 'markup' ? Math.abs(chartData[0].markup) : chartData[0].item_total) : 1;
+                  const currentVal = chartViewMode === 'markup' ? Math.abs(item.markup) : item.item_total;
+                  const widthPercent = maxVal > 0 ? (currentVal / maxVal) * 100 : 0;
+                  const isSelected = selectedItem === item.item_code;
+
+                  return (
+                    <div
+                      key={`${item.item_id}-${item.bom_path}`}
+                      className={`cursor-pointer rounded-lg p-2 -mx-2 transition-all ${
+                        isSelected ? 'bg-blue-100 ring-2 ring-blue-500' : 'hover:bg-gray-50'
+                      }`}
+                      onClick={() => setSelectedItem(isSelected ? null : item.item_code)}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="w-5 text-xs font-bold text-gray-400">{index + 1}</span>
+                        <span className="flex-1 text-sm font-medium text-gray-900 truncate" title={`${item.item_code} - ${item.item_name}`}>
+                          {item.item_code}
+                        </span>
+                        <span className="text-sm font-bold text-gray-700">
+                          {chartViewMode === 'markup'
+                            ? <span className={item.markup >= 0 ? 'text-green-600' : 'text-red-600'}>{item.markup.toFixed(1)}%</span>
+                            : `${currencySymbol}${item.item_total.toLocaleString()}`
+                          }
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-5" />
+                        <div className="flex-1 h-5 bg-gray-100 rounded overflow-hidden">
+                          <div
+                            className="h-full rounded transition-all"
+                            style={{
+                              width: `${Math.min(widthPercent, 100)}%`,
+                              backgroundColor: chartViewMode === 'markup'
+                                ? (item.markup >= 15 ? '#16a34a' : item.markup >= 5 ? '#ca8a04' : item.markup >= 0 ? '#f97316' : '#dc2626')
+                                : COLORS[index % COLORS.length]
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {chartData.length === 0 && (
+                <div className="text-center text-gray-500 py-8">No data to display</div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Right Chart - Rate Comparison Table */}
+          <Card className="border-gray-200">
+            <CardContent className="p-5">
+              <h4 className="font-bold text-gray-900 mb-1 text-lg">Rate Comparison</h4>
+              <p className="text-sm text-gray-600 mb-4">
+                All three rates side by side for top items
+              </p>
+
+              {/* Mini table header */}
+              <div className="grid grid-cols-12 gap-1 text-xs font-bold text-gray-600 border-b border-gray-200 pb-2 mb-2">
+                <div className="col-span-3">Item</div>
+                <div className="col-span-3 text-right">Vendor Base</div>
+                <div className="col-span-3 text-right">Buyer Base</div>
+                <div className="col-span-3 text-right">Landed</div>
+              </div>
+
+              <div className="space-y-1">
+                {chartData.slice(0, 8).map((item, index) => {
+                  const isSelected = selectedItem === item.item_code;
+
+                  return (
+                    <div
+                      key={`table-${item.item_id}-${item.bom_path}`}
+                      className={`grid grid-cols-12 gap-1 py-2 px-1 rounded cursor-pointer transition-all ${
+                        isSelected ? 'bg-blue-100 ring-1 ring-blue-400' : 'hover:bg-gray-50'
+                      }`}
+                      onClick={() => setSelectedItem(isSelected ? null : item.item_code)}
+                    >
+                      <div className="col-span-3 text-sm font-medium text-gray-900 truncate" title={item.item_code}>
+                        {item.item_code}
+                      </div>
+                      <div className="col-span-3 text-right text-sm font-mono text-gray-600">
+                        {item.vendor_rate > 0 ? `${item.vendor_currency_symbol}${item.vendor_rate.toLocaleString()}` : '-'}
+                      </div>
+                      <div className="col-span-3 text-right text-sm font-mono text-blue-600 font-medium">
+                        {currencySymbol}{item.base_rate.toLocaleString()}
+                      </div>
+                      <div className="col-span-3 text-right text-sm font-mono text-green-600 font-bold">
+                        {currencySymbol}{item.quoted_rate.toLocaleString()}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Summary stats */}
+              {baseFilteredItems.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-gray-200 space-y-2">
+                  <div className="text-sm font-bold text-gray-700">Summary ({baseFilteredItems.length} items)</div>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-gray-50 rounded p-2">
+                      <div className="text-xs text-gray-500">Avg Vendor Base</div>
+                      <div className="text-sm font-bold text-gray-700">
+                        {currencySymbol}{(baseFilteredItems.reduce((s, i) => s + i.vendor_rate, 0) / baseFilteredItems.length).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      </div>
+                    </div>
+                    <div className="bg-blue-50 rounded p-2">
+                      <div className="text-xs text-blue-600">Avg Buyer Base</div>
+                      <div className="text-sm font-bold text-blue-700">
+                        {currencySymbol}{(baseFilteredItems.reduce((s, i) => s + i.base_rate, 0) / baseFilteredItems.length).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      </div>
+                    </div>
+                    <div className="bg-green-50 rounded p-2">
+                      <div className="text-xs text-green-600">Avg Landed</div>
+                      <div className="text-sm font-bold text-green-700">
+                        {currencySymbol}{(baseFilteredItems.reduce((s, i) => s + i.quoted_rate, 0) / baseFilteredItems.length).toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-center mt-2">
+                    <span className="text-xs text-gray-500">Average Markup: </span>
+                    <span className={`text-sm font-bold ${insights.avgMarkup >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {insights.avgMarkup.toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* Filter Bar Above Table */}
+      <Card className="border-gray-200">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Search */}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search items..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-48 pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
-              <YAxis
-                tick={{ fontSize: 10, fill: '#374151' }}
-                tickFormatter={(value) => `${currencySymbol}${(value / 1000).toFixed(0)}k`}
-                label={{ value: 'Rate per Unit', angle: -90, position: 'insideLeft', fontSize: 11, fontWeight: 'bold', fill: '#374151' }}
-              />
-              <Tooltip
-                formatter={(value: number, name: string, props: any) => {
-                  const item = props.payload;
-                  if (name === 'Vendor Rate') {
-                    const vendorCurr = item.vendorCurrency || currencySymbol;
-                    return [`${vendorCurr}${value.toLocaleString()}`, 'Vendor Rate'];
-                  }
-                  if (name === 'Base Rate') return [`${currencySymbol}${value.toLocaleString()} (${item.markup > 0 ? item.markup.toFixed(1) + '% markup' : 'N/A'})`, 'Base Rate'];
-                  if (name === 'Quoted Rate') return [`${currencySymbol}${value.toLocaleString()}`, 'Quoted Rate'];
-                  return [`${currencySymbol}${value.toLocaleString()}`, name];
+              <svg className="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </div>
+
+            <BOMInstanceFilter
+              bomInstances={bomInstances}
+              selectedInstances={selectedBOMInstances}
+              onSelectionChange={setSelectedBOMInstances}
+              hasVolumeScenarios={hasVolumeScenarios}
+            />
+
+            {/* BOM Filter Dropdown */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'bom' ? null : 'bom'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
+                  !selectedBOMs.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>BOM</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedBOMs.includes('all') ? 'All' : selectedBOMs.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'bom' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-72">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search BOMs..."
+                      value={bomSearch}
+                      onChange={(e) => setBomSearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedBOMs.includes('all')}
+                        onChange={() => setSelectedBOMs(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All BOMs ({rootBOMCount})</span>
+                    </label>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto py-1">
+                    {renderBOMTree(bomHierarchy)}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedBOMs(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Vendor Filter Dropdown */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'vendor' ? null : 'vendor'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
+                  !selectedVendors.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Vendor</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedVendors.includes('all') ? 'All' : selectedVendors.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'vendor' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search vendors..."
+                      value={vendorSearch}
+                      onChange={(e) => setVendorSearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedVendors.includes('all')}
+                        onChange={() => setSelectedVendors(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All Vendors</span>
+                    </label>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {filteredVendorList.map(vendor => (
+                      <label
+                        key={vendor.vendor_id}
+                        className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-100 cursor-pointer ${
+                          selectedVendors.includes(vendor.vendor_id) ? 'bg-blue-50' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedVendors.includes(vendor.vendor_id)}
+                          onChange={() => setSelectedVendors(toggleSelection(selectedVendors, vendor.vendor_id))}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-700 truncate">{vendor.vendor_name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedVendors(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Category Filter Dropdown */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'category' ? null : 'category'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
+                  !selectedCategories.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Category</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedCategories.includes('all') ? 'All' : selectedCategories.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'category' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search categories..."
+                      value={categorySearch}
+                      onChange={(e) => setCategorySearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes('all')}
+                        onChange={() => setSelectedCategories(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All Categories</span>
+                    </label>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {filteredCategoryList.map(cat => (
+                      <label
+                        key={cat}
+                        className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-100 cursor-pointer ${
+                          selectedCategories.includes(cat) ? 'bg-blue-50' : ''
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedCategories.includes(cat)}
+                          onChange={() => setSelectedCategories(toggleSelection(selectedCategories, cat))}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-700 truncate">{cat}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedCategories(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Page Size */}
+            <div className="flex items-center gap-1 ml-auto">
+              <span className="text-xs text-gray-600">Show:</span>
+              <select
+                value={pageSize}
+                onChange={(e) => setPageSize(Number(e.target.value))}
+                className="px-2 py-1 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500"
+              >
+                <option value={10}>10</option>
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            {/* Views (Column Visibility) */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'columns' ? null : 'columns'); }}
+                className="flex items-center gap-2 px-3 py-2 border border-gray-300 rounded-lg text-sm font-medium bg-white text-gray-700 hover:bg-gray-50"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 012 2m0 10V7m0 10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2h-2a2 2 0 00-2 2" />
+                </svg>
+                <span>Views</span>
+              </button>
+
+              {openDropdown === 'columns' && (
+                <div className="absolute top-full right-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-56">
+                  <div className="px-3 py-2 border-b border-gray-200">
+                    <span className="text-sm font-medium text-gray-900">Show Columns</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto py-1">
+                    {columnDefs.map(col => (
+                      <label key={col.key} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-100 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.has(col.key)}
+                          onChange={() => toggleColumn(col.key)}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-700">{col.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200">
+                    <button onClick={() => setOpenDropdown(null)} className="w-full px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Clear All */}
+            {hasActiveFilters && (
+              <button
+                onClick={clearAllFilters}
+                className="px-3 py-2 text-xs bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-100 font-medium"
+              >
+                Clear All
+              </button>
+            )}
+          </div>
+
+          {/* Active Filter Pills */}
+          {hasActiveFilters && (
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              <span className="text-xs text-gray-500">Active filters:</span>
+
+              {selectedItem && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                  Item: {selectedItem}
+                  <button onClick={() => setSelectedItem(null)} className="hover:text-blue-900">×</button>
+                </span>
+              )}
+
+              <BOMInstanceFilterPills
+                selectedInstances={selectedBOMInstances}
+                bomInstances={bomInstances}
+                onRemove={(instanceId) => {
+                  const newInstances = selectedBOMInstances.filter(id => id !== instanceId);
+                  setSelectedBOMInstances(newInstances.length ? newInstances : ['all']);
                 }}
-                labelFormatter={(_label, payload) => {
-                  const item = payload?.[0]?.payload;
-                  return `${item?.fullName || ''} | ${item?.itemName || ''}\nVendor: ${item?.vendorName || 'N/A'}`;
-                }}
-                contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px', whiteSpace: 'pre-line' }}
               />
-              <Legend verticalAlign="top" height={36} wrapperStyle={{ fontSize: '11px' }} />
-              <Bar dataKey="Vendor Rate" fill="#9ca3af" radius={[4, 4, 0, 0]} name="Vendor Rate" />
-              <Bar dataKey="Base Rate" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Base Rate" />
-              <Bar dataKey="Quoted Rate" fill="#10b981" radius={[4, 4, 0, 0]} name="Quoted Rate" />
-            </BarChart>
-          </ResponsiveContainer>
+
+              {!selectedBOMs.includes('all') && selectedBOMs.map(bom => (
+                <span key={bom} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                  BOM: {bom.split(' > ').pop()}
+                  <button onClick={() => {
+                    const newBOMs = selectedBOMs.filter(b => b !== bom);
+                    setSelectedBOMs(newBOMs.length ? newBOMs : ['all']);
+                  }} className="hover:text-blue-900">×</button>
+                </span>
+              ))}
+
+              {!selectedVendors.includes('all') && selectedVendors.map(vId => (
+                <span key={vId} className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
+                  Vendor: {uniqueVendors.find(v => v.vendor_id === vId)?.vendor_name || vId}
+                  <button onClick={() => {
+                    const newVendors = selectedVendors.filter(v => v !== vId);
+                    setSelectedVendors(newVendors.length ? newVendors : ['all']);
+                  }} className="hover:text-green-900">×</button>
+                </span>
+              ))}
+
+              {!selectedCategories.includes('all') && selectedCategories.map(cat => (
+                <span key={cat} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
+                  Category: {cat}
+                  <button onClick={() => {
+                    const newCats = selectedCategories.filter(c => c !== cat);
+                    setSelectedCategories(newCats.length ? newCats : ['all']);
+                  }} className="hover:text-purple-900">×</button>
+                </span>
+              ))}
+
+              {searchQuery && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                  Search: "{searchQuery}"
+                  <button onClick={() => setSearchQuery('')} className="hover:text-gray-900">×</button>
+                </span>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
-      {/* Detailed Rate Table with Pagination */}
+      {/* Table */}
       <Card className="border-gray-300 shadow-sm">
         <CardContent className="p-0">
-          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex justify-between items-center">
+          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300">
             <h4 className="font-bold text-gray-900 text-sm">
               Complete Rate Breakdown
-              {searchQuery && <span className="ml-2 text-blue-600 font-normal">- Searching: "{searchQuery}"</span>}
+              {selectedItem && <span className="ml-2 text-blue-600">- Showing: {selectedItem}</span>}
             </h4>
-            <div className="text-xs text-gray-700 font-medium">
-              Showing {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredItems.length)} of {filteredItems.length} items
-            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-gray-100 border-b-2 border-gray-400">
-                  <th className="px-3 py-2 text-left font-bold text-gray-700 border-r border-gray-300 text-xs">#</th>
-                  <th className="px-3 py-2 text-left font-bold text-gray-700 border-r border-gray-300 text-xs">Item Code</th>
-                  <th className="px-3 py-2 text-left font-bold text-gray-700 border-r border-gray-300 text-xs">Item Name</th>
-                  <th className="px-3 py-2 text-left font-bold text-gray-700 border-r border-gray-300 text-xs">Vendor</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">Qty</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">Vendor Rate</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">Base Rate</th>
-                  <th className="px-3 py-2 text-center font-bold text-gray-700 border-r border-gray-300 text-xs">Markup</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">AC/Unit</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">Quoted Rate</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 border-r border-gray-300 text-xs">Total</th>
-                  <th className="px-3 py-2 text-right font-bold text-gray-700 text-xs">% Quote</th>
+                  <th className="px-3 py-2 text-left font-bold text-gray-700 border-r border-gray-300 text-sm">#</th>
+                  {columnDefs.filter(col => visibleColumns.has(col.key)).map(col => (
+                    <th
+                      key={col.key}
+                      className={`px-3 py-2 font-bold text-gray-700 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 ${col.align === 'right' ? 'text-right' : col.align === 'center' ? 'text-center' : 'text-left'}`}
+                      onClick={() => handleSort(col.key)}
+                    >
+                      {col.label}
+                      {sortColumn === col.key && (
+                        <span className="ml-1 text-blue-600">{sortDirection === 'asc' ? '↑' : '↓'}</span>
+                      )}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="bg-white">
@@ -610,97 +1119,133 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
                     key={`${item.item_id}-${item.bom_path}-${idx}`}
                     className="border-b border-gray-200 hover:bg-blue-50 transition-colors"
                   >
-                    <td className="px-3 py-2 text-gray-600 border-r border-gray-200 text-xs">
-                      {((currentPage - 1) * itemsPerPage) + idx + 1}
+                    <td className="px-3 py-2 text-gray-600 border-r border-gray-200 text-sm">
+                      {((currentPage - 1) * pageSize) + idx + 1}
                     </td>
-                    <td className="px-3 py-2 border-r border-gray-200">
-                      <span className="font-mono font-medium text-gray-900 text-xs">{item.item_code}</span>
-                    </td>
-                    <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-[150px] truncate text-xs" title={item.item_name}>
-                      {item.item_name}
-                    </td>
-                    <td className="px-3 py-2 border-r border-gray-200">
-                      <button
-                        onClick={() => navigateToTab('items', { selectedVendor: item.vendor_name || undefined })}
-                        className="text-xs text-blue-700 hover:text-blue-900 hover:underline font-medium"
-                      >
-                        {item.vendor_name || 'N/A'}
-                      </button>
-                    </td>
-                    <td className="px-3 py-2 text-right text-gray-700 border-r border-gray-200 text-xs">
-                      {item.quantity} {item.unit}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-gray-600 border-r border-gray-200 text-xs">
-                      {item.vendor_rate > 0
-                        ? `${item.vendor_currency_symbol}${item.vendor_rate.toLocaleString()}`
-                        : <span className="text-gray-400">-</span>
-                      }
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono font-medium text-blue-600 border-r border-gray-200 text-xs">
-                      {currencySymbol}{item.base_rate.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-center border-r border-gray-200">
-                      {item.vendor_rate > 0 ? (
-                        <Badge className={`text-xs ${item.markup >= 15 ? 'bg-green-100 text-green-800' : item.markup >= 5 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
-                          {item.markup.toFixed(1)}%
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-gray-400">N/A</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono text-orange-600 border-r border-gray-200 text-xs">
-                      {currencySymbol}{item.additional_cost_per_unit.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-green-600 border-r border-gray-200 text-xs">
-                      {currencySymbol}{item.quoted_rate.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200 text-xs">
-                      {currencySymbol}{item.item_total.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-2 text-right text-gray-600 text-xs">
-                      {item.percent_of_quote.toFixed(1)}%
-                    </td>
+
+                    {visibleColumns.has('item_code') && (
+                      <td className="px-3 py-2 border-r border-gray-200">
+                        <span className="font-mono font-medium text-gray-900 text-sm">{item.item_code}</span>
+                      </td>
+                    )}
+
+                    {visibleColumns.has('item_name') && (
+                      <td className="px-3 py-2 text-gray-700 border-r border-gray-200 max-w-[150px] truncate text-sm" title={item.item_name}>
+                        {item.item_name}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('vendor_name') && (
+                      <td className="px-3 py-2 border-r border-gray-200">
+                        <button
+                          onClick={() => navigateToTab('items', { selectedVendor: item.vendor_name || undefined })}
+                          className="text-sm text-blue-700 hover:text-blue-900 hover:underline font-medium"
+                        >
+                          {item.vendor_name || 'N/A'}
+                        </button>
+                      </td>
+                    )}
+
+                    {visibleColumns.has('bom_path') && (
+                      <td className="px-3 py-2 border-r border-gray-200">
+                        <button
+                          onClick={() => navigateToTab('bom', { selectedBOM: item.bom_path })}
+                          className="font-mono text-sm text-blue-700 hover:text-blue-900 hover:underline font-medium"
+                        >
+                          {item.bom_path}
+                        </button>
+                      </td>
+                    )}
+
+                    {visibleColumns.has('quantity') && (
+                      <td className="px-3 py-2 text-right text-gray-700 border-r border-gray-200 text-sm">
+                        {item.quantity} {item.unit}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('vendor_rate') && (
+                      <td className="px-3 py-2 text-right font-mono text-gray-600 border-r border-gray-200 text-sm">
+                        {item.vendor_rate > 0
+                          ? `${item.vendor_currency_symbol}${item.vendor_rate.toLocaleString()}`
+                          : <span className="text-gray-400">-</span>
+                        }
+                      </td>
+                    )}
+
+                    {visibleColumns.has('base_rate') && (
+                      <td className="px-3 py-2 text-right font-mono font-medium text-blue-600 border-r border-gray-200 text-sm">
+                        {currencySymbol}{item.base_rate.toLocaleString()}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('markup') && (
+                      <td className="px-3 py-2 text-center border-r border-gray-200">
+                        {item.vendor_rate > 0 ? (
+                          <Badge className={`text-xs ${item.markup >= 15 ? 'bg-green-100 text-green-800' : item.markup >= 5 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
+                            {item.markup.toFixed(1)}%
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-gray-400">N/A</span>
+                        )}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('ac_per_unit') && (
+                      <td className="px-3 py-2 text-right font-mono text-orange-600 border-r border-gray-200 text-sm">
+                        {currencySymbol}{item.additional_cost_per_unit.toLocaleString()}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('quoted_rate') && (
+                      <td className="px-3 py-2 text-right font-mono font-bold text-green-600 border-r border-gray-200 text-sm">
+                        {currencySymbol}{item.quoted_rate.toLocaleString()}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('item_total') && (
+                      <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200 text-sm">
+                        {currencySymbol}{item.item_total.toLocaleString()}
+                      </td>
+                    )}
+
+                    {visibleColumns.has('percent_of_quote') && (
+                      <td className="px-3 py-2 text-right text-gray-600 text-sm">
+                        {item.percent_of_quote.toFixed(1)}%
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {/* Pagination Controls */}
+          {/* Table Footer with Pagination */}
           <div className="bg-gray-50 px-4 py-3 border-t border-gray-300 flex justify-between items-center">
-            <div className="text-xs text-gray-700 font-medium">
-              Page {currentPage} of {totalPages}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1}
-                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
-              >
-                First
-              </button>
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
-              >
-                ← Prev
-              </button>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
-              >
-                Next →
-              </button>
-              <button
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages}
-                className="px-3 py-1 text-xs bg-gray-200 hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed rounded font-medium"
-              >
-                Last
-              </button>
-            </div>
+            <span className="text-sm text-gray-600">
+              Showing {paginatedItems.length} of {filteredItems.length} items
+            </span>
+
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600 font-medium">
+                  Page {currentPage} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className={`px-3 py-1.5 rounded text-sm font-medium ${currentPage === 1 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
+                >
+                  ← Prev
+                </button>
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className={`px-3 py-1.5 rounded text-sm font-medium ${currentPage === totalPages ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
+                >
+                  Next →
+                </button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

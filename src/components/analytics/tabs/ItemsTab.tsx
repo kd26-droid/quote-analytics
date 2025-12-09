@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../ui/card';
 import CostView from './items-views/CostView';
@@ -9,6 +9,7 @@ import AdditionalCostsView from './items-views/AdditionalCostsView';
 import CustomView from './items-views/CustomView';
 import ItemSourceView from './items-views/ItemSourceView';
 import ItemVolumeAnalysisView from './items-views/ItemVolumeAnalysisView';
+import { useBOMInstances } from '../../../hooks/useBOMInstances';
 import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation, BOMCostComparison } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
 import type { CostViewData } from '../../../services/api';
@@ -17,8 +18,8 @@ export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
-  costViewData: CostViewData;
-  currencySymbol: string;
+  costViewData?: CostViewData;
+  currencySymbol?: string;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -27,12 +28,14 @@ interface ItemsTabProps {
   bomCostComparison: BOMCostComparison[];
   navigationContext: NavigationContext;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+  filterResetKey?: number;
+  clearAllFilters?: () => void;
 }
 
 export default function ItemsTab({
   data,
   costViewData,
-  currencySymbol,
+  currencySymbol = '₹',
   totalQuoteValue,
   totalItems,
   topCategories,
@@ -40,7 +43,9 @@ export default function ItemsTab({
   vendorRateDeviation,
   bomCostComparison,
   navigationContext,
-  navigateToTab
+  navigateToTab,
+  filterResetKey,
+  clearAllFilters
 }: ItemsTabProps) {
   const [selectedView, setSelectedView] = useState<ItemViewType>('cost');
 
@@ -53,15 +58,8 @@ export default function ItemsTab({
     }
   }, [navigationContext]);
 
-  // Detect if volume analysis should be shown
-  const hasVolumeItems = useMemo(() => {
-    const itemCodeCounts = new Map<string, number>();
-    data.overall.forEach(item => {
-      const count = itemCodeCounts.get(item.itemCode) || 0;
-      itemCodeCounts.set(item.itemCode, count + 1);
-    });
-    return Array.from(itemCodeCounts.values()).some(count => count > 1);
-  }, [data.overall]);
+  // Use shared hook to detect volume scenarios from costViewData
+  const { hasVolumeScenarios } = useBOMInstances(costViewData?.items || []);
 
   const views = [
     { id: 'cost' as ItemViewType, label: 'Cost View', icon: '💰' },
@@ -70,7 +68,7 @@ export default function ItemsTab({
     { id: 'rate' as ItemViewType, label: 'Rate View', icon: '📊' },
     { id: 'additional-costs' as ItemViewType, label: 'Additional Costs', icon: '💸' },
     { id: 'item-source' as ItemViewType, label: 'Item Source', icon: '🔄' },
-    ...(hasVolumeItems
+    ...(hasVolumeScenarios
       ? [{ id: 'volume-analysis' as ItemViewType, label: 'Volume Analysis', icon: '📈' }]
       : []
     ),
@@ -116,6 +114,8 @@ export default function ItemsTab({
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
             setSelectedView={setSelectedView}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'vendor' && (
@@ -127,6 +127,8 @@ export default function ItemsTab({
             topVendors={topVendors}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'category' && (
@@ -138,6 +140,8 @@ export default function ItemsTab({
             topCategories={topCategories}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'rate' && (
@@ -149,6 +153,8 @@ export default function ItemsTab({
             vendorRateDeviation={vendorRateDeviation}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'additional-costs' && (
@@ -159,6 +165,8 @@ export default function ItemsTab({
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'item-source' && (
@@ -169,12 +177,15 @@ export default function ItemsTab({
             navigateToTab={navigateToTab}
           />
         )}
-        {selectedView === 'volume-analysis' && hasVolumeItems && (
+        {selectedView === 'volume-analysis' && hasVolumeScenarios && costViewData && (
           <ItemVolumeAnalysisView
-            data={data}
-            bomCostComparison={bomCostComparison}
+            costViewData={costViewData}
+            currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}
+            navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
         {selectedView === 'custom' && (

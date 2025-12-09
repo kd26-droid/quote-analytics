@@ -4,13 +4,21 @@ import { analyticsData } from './data/mockQuoteData';
 import {
   fetchQuoteAnalyticsHeader,
   fetchCostViewData,
+  fetchBOMDetailData,
+  fetchOverallACData
+} from './services/api';
+import type {
   QuoteAnalyticsHeaderData,
-  CostViewData
+  CostViewData,
+  BOMDetailData,
+  OverallACData
 } from './services/api';
 
 function App() {
   const [headerData, setHeaderData] = useState<QuoteAnalyticsHeaderData | null>(null);
   const [costViewData, setCostViewData] = useState<CostViewData | null>(null);
+  const [bomDetailData, setBomDetailData] = useState<BOMDetailData | null>(null);
+  const [overallACData, setOverallACData] = useState<OverallACData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,14 +39,32 @@ function App() {
         setLoading(true);
         setError(null);
 
-        // Load header and cost view data in parallel
+        // Load header and cost view data in parallel (required)
         const [headerResponse, costViewResponse] = await Promise.all([
           fetchQuoteAnalyticsHeader(costingSheetId, token),
           fetchCostViewData(costingSheetId, token)
         ]);
 
-        setHeaderData(headerResponse.data);
-        setCostViewData(costViewResponse.data);
+        setHeaderData(headerResponse);
+        setCostViewData(costViewResponse);
+
+        // Try to load BOM detail data (optional - may not exist yet)
+        try {
+          const bomDetailResponse = await fetchBOMDetailData(costingSheetId, token);
+          setBomDetailData(bomDetailResponse);
+        } catch (bomErr) {
+          console.warn('BOM Detail API not available, using fallback data:', bomErr);
+          setBomDetailData(null);
+        }
+
+        // Try to load Overall AC data (optional - may not exist yet)
+        try {
+          const overallACResponse = await fetchOverallACData(costingSheetId, token);
+          setOverallACData(overallACResponse);
+        } catch (overallErr) {
+          console.warn('Overall AC API not available:', overallErr);
+          setOverallACData(null);
+        }
       } catch (err: any) {
         console.error('Failed to load quote analytics data:', err);
         setError(err.message || 'Failed to load quote data');
@@ -171,12 +197,6 @@ function App() {
                 <td style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>BOMs</td>
                 <td style={{ fontWeight: '600', color: '#111827', fontSize: '16px' }}>{headerData.bom_summary.bom_list.map(bom => bom.bom_name).join(', ') || '-'}</td>
               </tr>
-              <tr style={{ backgroundColor: '#f0f9ff' }}>
-                <td style={{ fontWeight: '700', color: '#1e40af', fontSize: '14px', padding: '12px' }}>Total Quote Value</td>
-                <td colSpan={3} style={{ fontWeight: '700', color: '#1e40af', fontSize: '24px', padding: '12px' }}>
-                  {headerData.financial_summary.currency_symbol}{costViewData.summary.grand_total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </td>
-              </tr>
             </tbody>
           </table>
         </div>
@@ -185,6 +205,8 @@ function App() {
         <QuoteAnalyticsDashboard
           data={analyticsData.topItemsByCost}
           costViewData={costViewData}
+          bomDetailData={bomDetailData}
+          overallACData={overallACData}
           totalQuoteValue={costViewData.summary.grand_total}
           totalItems={costViewData.summary.total_costing_sheet_items}
           topCategories={analyticsData.topCategories}
@@ -192,6 +214,7 @@ function App() {
           additionalCosts={analyticsData.additionalCostsBreakdown}
           bomCostComparison={analyticsData.bomCostComparison}
           vendorRateDeviation={analyticsData.vendorRateDeviation}
+          currencySymbol={headerData.currency_info.currency_symbol}
         />
 
         {/* Footer */}

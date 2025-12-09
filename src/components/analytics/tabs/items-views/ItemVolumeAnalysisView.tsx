@@ -1,336 +1,439 @@
 import { useState, useMemo } from 'react';
+import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import type { TopItemsAnalytics, BOMCostComparison } from '../../../../types/quote.types';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer
+} from 'recharts';
+import type { CostViewData, CostViewItem } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
+import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 
 interface ItemVolumeAnalysisViewProps {
-  data: TopItemsAnalytics;
-  bomCostComparison: BOMCostComparison[];
+  costViewData: CostViewData;
+  currencySymbol: string;
   totalQuoteValue: number;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+  navigationContext?: NavigationContext;
+  filterResetKey?: number;
+  onClearAllFilters?: () => void;
 }
 
-// Structure for a single item instance at specific BOM configuration
-interface ItemInstance {
-  bomCode: string;
-  bomInstanceId: string;
-  bomQuantity: number;
-  itemQuantity: number;
-  vendorRate: number;
-  baseRate: number;
-  additionalCosts: {
-    name: string;
-    type: 'PERCENTAGE' | 'ABSOLUTE_VALUE' | 'FORMULA';
-    allocationType: 'PER_UNIT' | 'OVERALL_QUANTITY';
-    totalValue: number;
-    perUnitValue: number;
-  }[];
-  totalAC: number;
-  taxes: number;
-  discounts: number;
-  quotedRate: number;
-  totalCost: number;
-}
+// Color palette for charts
+const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
 
-// Structure for an item with multiple volume scenarios
-interface VolumeItem {
-  itemCode: string;
-  itemName: string;
-  vendor: string;
-  category: string;
-  bomCode: string;
-  instances: ItemInstance[];
-  perUnitChange: number;
-  perUnitChangePercent: number;
-}
+// Available views for volume analysis
+type VolumeViewType =
+  | 'quoted_rate'
+  | 'vendor_rate'
+  | 'base_rate'
+  | 'total_ac'
+  | 'total_cost';
+
+const VIEW_OPTIONS: { value: VolumeViewType; label: string; description: string }[] = [
+  { value: 'quoted_rate', label: 'Quoted Rate', description: 'Final per-unit rate after all costs' },
+  { value: 'vendor_rate', label: 'Vendor Rate', description: 'Original rate from vendor' },
+  { value: 'base_rate', label: 'Base Rate', description: 'Rate converted to quote currency' },
+  { value: 'total_ac', label: 'Additional Costs', description: 'Total AC per unit' },
+  { value: 'total_cost', label: 'Total Cost', description: 'Total line cost (qty × rate)' },
+];
+
+// Display mode for the view
+type DisplayMode = 'table' | 'chart';
 
 export default function ItemVolumeAnalysisView({
-  data,
-  bomCostComparison,
+  costViewData,
+  currencySymbol,
   totalQuoteValue,
-  navigateToTab
+  navigateToTab,
+  navigationContext,
+  filterResetKey,
+  onClearAllFilters
 }: ItemVolumeAnalysisViewProps) {
-  const [selectedItems, setSelectedItems] = useState<string[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showDropdown, setShowDropdown] = useState(false);
+  // View selection
+  const [selectedView, setSelectedView] = useState<VolumeViewType>('quoted_rate');
+  const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
+  const [selectedChartItem, setSelectedChartItem] = useState<string | null>(null);
 
-  // Detect volume scenarios: same BOM code appearing multiple times with different quantities
-  const volumeScenarios = useMemo(() => {
-    const bomGroups = new Map<string, BOMCostComparison[]>();
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
-    bomCostComparison.forEach(bom => {
-      if (!bomGroups.has(bom.bomCode)) {
-        bomGroups.set(bom.bomCode, []);
+  // Filters
+  const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
+  const [selectedTags, setSelectedTags] = useState<string[]>(['all']);
+  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
+  const [tableSearch, setTableSearch] = useState('');
+
+  // Sorting
+  const [sortColumn, setSortColumn] = useState<string>('change_percent');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+
+  // Dropdown state
+  const [openDropdown, setOpenDropdown] = useState<'vendor' | 'tags' | 'bom' | 'view' | null>(null);
+  const [vendorSearch, setVendorSearch] = useState('');
+  const [tagSearch, setTagSearch] = useState('');
+  const [bomSearch, setBomSearch] = useState('');
+  const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
+
+  // Get items from API - with null safety
+  const items = costViewData?.items || [];
+  const filters = costViewData?.filters || { vendor_list: [], tag_list: [] };
+
+  // Use shared BOM instances hook
+  const { bomInstances, hasVolumeScenarios } = useBOMInstances(items);
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.filter-dropdown')) {
+        setOpenDropdown(null);
       }
-      bomGroups.get(bom.bomCode)!.push(bom);
-    });
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
-    const scenarios = new Map<string, BOMCostComparison[]>();
-    bomGroups.forEach((boms, bomCode) => {
-      if (boms.length > 1) {
-        const quantities = boms.map(b => b.bomQuantity);
-        const uniqueQtys = new Set(quantities);
-        if (uniqueQtys.size > 1) {
-          boms.sort((a, b) => a.bomQuantity - b.bomQuantity);
-          scenarios.set(bomCode, boms);
+  // Reset filters when filterResetKey changes
+  React.useEffect(() => {
+    if (filterResetKey !== undefined && filterResetKey > 0) {
+      setSelectedVendors(['all']);
+      setSelectedTags(['all']);
+      setSelectedBOMs(['all']);
+      setTableSearch('');
+      setCurrentPage(1);
+    }
+  }, [filterResetKey]);
+
+  // Build BOM hierarchy list for filter
+  const bomHierarchy = useMemo(() => {
+    const bomPathSet = new Set<string>();
+    const rootBOMs = new Set<string>();
+
+    items.forEach(item => {
+      if (item.bom_path) {
+        bomPathSet.add(item.bom_path);
+        const parts = item.bom_path.split(' > ');
+        rootBOMs.add(parts[0]);
+        // Add parent paths for hierarchy
+        for (let i = 1; i < parts.length; i++) {
+          bomPathSet.add(parts.slice(0, i + 1).join(' > '));
         }
       }
     });
 
-    return scenarios;
-  }, [bomCostComparison]);
+    // Build hierarchy structure
+    const hierarchy: { path: string; level: number; label: string }[] = [];
+    const sortedPaths = Array.from(bomPathSet).sort();
 
-  // Get BOM instance headers for table
-  const bomInstances = useMemo(() => {
-    const instances: { bomCode: string; bomInstanceId: string; bomQuantity: number; label: string }[] = [];
-
-    volumeScenarios.forEach((boms, bomCode) => {
-      boms.forEach((bom, idx) => {
-        instances.push({
-          bomCode,
-          bomInstanceId: `${bomCode}_${idx}`,
-          bomQuantity: bom.bomQuantity,
-          label: `BOM ${bomCode} Instance ${idx + 1} (${bom.bomQuantity} units)`
-        });
+    sortedPaths.forEach(path => {
+      const parts = path.split(' > ');
+      hierarchy.push({
+        path,
+        level: parts.length - 1,
+        label: parts[parts.length - 1]
       });
     });
 
-    return instances;
-  }, [volumeScenarios]);
+    return { paths: hierarchy, rootBOMs: Array.from(rootBOMs).sort() };
+  }, [items]);
 
-  // Parse items to detect volume scenarios within same BOM
-  const volumeItems = useMemo((): VolumeItem[] => {
-    if (volumeScenarios.size === 0) return [];
+  // Helper function to toggle multi-select
+  const toggleSelection = (current: string[], value: string) => {
+    if (value === 'all') return ['all'];
+    let newSelection = current.filter(v => v !== 'all');
+    if (newSelection.includes(value)) {
+      newSelection = newSelection.filter(v => v !== value);
+      if (newSelection.length === 0) return ['all'];
+    } else {
+      newSelection.push(value);
+    }
+    return newSelection;
+  };
 
-    const itemGroups = new Map<string, {
-      itemCode: string;
-      itemName: string;
-      vendor: string;
-      category: string;
-      bomCode: string;
-      instances: ItemInstance[];
-      uniqueIndex: number;
-    }>();
+  // Group items by item_code + bom_path to find volume scenarios
+  // An item has volume scenarios if same item at same BOM path appears in multiple BOM instances
+  const volumeAnalysisData = useMemo(() => {
+    if (!hasVolumeScenarios) return [];
 
-    let uniqueItemCounter = 0;
+    // Group items by item_code + bom_path (to compare same item at same hierarchy level)
+    const itemGroups = new Map<string, CostViewItem[]>();
 
-    data.overall.forEach((item, itemIndex) => {
-      const bomCode = item.bomPath.split('.')[0];
-
-      if (!volumeScenarios.has(bomCode)) return;
-
-      const groupKey = `${bomCode}_${item.itemCode}`;
-
-      if (!itemGroups.has(groupKey)) {
-        itemGroups.set(groupKey, {
-          itemCode: item.itemCode,
-          itemName: item.itemName,
-          vendor: item.vendor,
-          category: item.category || 'Uncategorized',
-          bomCode,
-          instances: [],
-          uniqueIndex: uniqueItemCounter
-        });
-        uniqueItemCounter++;
+    items.forEach(item => {
+      // Use item_code + bom_path as the grouping key
+      // This ensures we compare the same item at the same BOM hierarchy position
+      const key = `${item.item_code}||${item.bom_path || item.bom_code}`;
+      if (!itemGroups.has(key)) {
+        itemGroups.set(key, []);
       }
-
-      const bomInstancesForCode = volumeScenarios.get(bomCode)!;
-      const bomInstanceIndex = bomInstancesForCode.findIndex(b => b.bomQuantity === item.quantity);
-      const bomInstanceId = `${bomCode}_${bomInstanceIndex >= 0 ? bomInstanceIndex : 0}`;
-
-      const isHighVolume = bomInstanceIndex > 0;
-
-      // Create variety in cost changes - some items get MORE expensive at high volume
-      // Every 3rd item increases in cost, others decrease
-      const uniqueIndex = itemGroups.get(groupKey)!.uniqueIndex;
-      const itemIncreases = uniqueIndex % 3 === 2;
-
-      let vendorRate, baseRate;
-      if (itemIncreases) {
-        // Item gets MORE expensive at high volume
-        vendorRate = isHighVolume ? item.quotedRate * 0.90 : item.quotedRate * 0.88;
-        baseRate = isHighVolume ? item.quotedRate * 0.95 : item.quotedRate * 0.92;
-      } else {
-        // Item gets cheaper at high volume
-        vendorRate = isHighVolume ? item.quotedRate * 0.85 : item.quotedRate * 0.88;
-        baseRate = isHighVolume ? item.quotedRate * 0.89 : item.quotedRate * 0.92;
-      }
-
-      // Parse additional costs
-      const additionalCosts = [
-        {
-          name: 'Setup Fee',
-          type: 'ABSOLUTE_VALUE' as const,
-          allocationType: 'OVERALL_QUANTITY' as const,
-          totalValue: 800,
-          perUnitValue: 800 / item.quantity
-        },
-        {
-          name: 'Special Coating',
-          type: 'ABSOLUTE_VALUE' as const,
-          allocationType: 'PER_UNIT' as const,
-          totalValue: 100 * item.quantity,
-          perUnitValue: 100
-        },
-        {
-          name: 'Warranty',
-          type: 'PERCENTAGE' as const,
-          allocationType: 'PER_UNIT' as const,
-          totalValue: item.quotedRate * 0.05 * item.quantity,
-          perUnitValue: item.quotedRate * 0.05
-        }
-      ];
-
-      // For items that increase, add extra cost at high volume
-      if (itemIncreases && isHighVolume) {
-        additionalCosts.push({
-          name: 'Bulk Handling',
-          type: 'ABSOLUTE_VALUE' as const,
-          allocationType: 'PER_UNIT' as const,
-          totalValue: 50 * item.quantity,
-          perUnitValue: 50
-        });
-      }
-
-      const totalAC = additionalCosts.reduce((sum, ac) => sum + ac.perUnitValue, 0);
-
-      // Calculate quoted rate based on whether item increases or decreases
-      // Use the base item rate as LOW volume baseline
-      let quotedRate;
-      if (isHighVolume) {
-        if (itemIncreases) {
-          // High volume MORE expensive - increase by 8%
-          quotedRate = item.quotedRate * 1.08;
-        } else {
-          // High volume cheaper - decrease by 8%
-          quotedRate = item.quotedRate * 0.92;
-        }
-      } else {
-        // Low volume - use base rate
-        quotedRate = item.quotedRate;
-      }
-
-      // Discounts only at high volume
-      const discounts = isHighVolume ? quotedRate * 0.03 : 0;
-
-      itemGroups.get(groupKey)!.instances.push({
-        bomCode,
-        bomInstanceId,
-        bomQuantity: item.quantity,
-        itemQuantity: item.quantity,
-        vendorRate,
-        baseRate,
-        additionalCosts,
-        totalAC,
-        taxes: quotedRate * 0.18,
-        discounts,
-        quotedRate,
-        totalCost: quotedRate * item.quantity
-      });
+      itemGroups.get(key)!.push(item);
     });
 
-    const volumeItems: VolumeItem[] = [];
-    itemGroups.forEach(group => {
-      if (group.instances.length > 1) {
-        // Sort instances by BOM quantity
-        group.instances.sort((a, b) => a.bomQuantity - b.bomQuantity);
+    // Filter to only items that appear in multiple BOM instances
+    const volumeItems: {
+      item_code: string;
+      item_name: string;
+      vendor_name: string | null;
+      bom_path: string;
+      tags: string[];
+      instances: {
+        bom_instance_id: string;
+        bom_instance_qty: number;
+        bom_code: string;
+        quantity: number;
+        vendor_rate: number;
+        base_rate: number;
+        quoted_rate: number;
+        total_ac: number;
+        total_cost: number;
+      }[];
+    }[] = [];
 
-        // Re-calculate quoted rates using FIRST instance as baseline
-        const baselineRate = group.instances[0].quotedRate;
-        const itemIncreases = group.uniqueIndex % 3 === 2;
+    itemGroups.forEach((groupItems, _key) => {
+      // Check if this item appears in multiple different BOM instances
+      const uniqueInstances = new Set(groupItems.map(i => i.bom_instance_id));
 
-        group.instances.forEach((instance, idx) => {
-          if (idx === 0) {
-            // Keep low volume as-is
-            instance.quotedRate = baselineRate;
-          } else {
-            // High volume - recalculate
-            if (itemIncreases) {
-              instance.quotedRate = baselineRate * 1.08; // 8% MORE expensive
-            } else {
-              instance.quotedRate = baselineRate * 0.92; // 8% cheaper
-            }
-            // Recalculate taxes and discounts based on NEW quoted rate
-            instance.taxes = instance.quotedRate * 0.18;
-            instance.discounts = instance.quotedRate * 0.03;
-            instance.totalCost = instance.quotedRate * instance.itemQuantity;
-          }
-        });
-
-        const lowestVolumeInstance = group.instances[0];
-        const highestVolumeInstance = group.instances[group.instances.length - 1];
-        const perUnitChange = highestVolumeInstance.quotedRate - lowestVolumeInstance.quotedRate;
-        const perUnitChangePercent = (perUnitChange / lowestVolumeInstance.quotedRate) * 100;
+      if (uniqueInstances.size > 1) {
+        // Sort by BOM instance quantity
+        const sortedItems = [...groupItems].sort((a, b) => a.bom_instance_qty - b.bom_instance_qty);
 
         volumeItems.push({
-          ...group,
-          perUnitChange,
-          perUnitChangePercent
+          item_code: sortedItems[0].item_code,
+          item_name: sortedItems[0].item_name,
+          vendor_name: sortedItems[0].vendor_name,
+          bom_path: sortedItems[0].bom_path || sortedItems[0].bom_code,
+          tags: sortedItems[0].tags,
+          instances: sortedItems.map(item => ({
+            bom_instance_id: item.bom_instance_id,
+            bom_instance_qty: item.bom_instance_qty,
+            bom_code: item.bom_code,
+            quantity: item.quantity,
+            vendor_rate: item.vendor_rate,
+            base_rate: item.base_rate,
+            quoted_rate: item.quoted_rate,
+            total_ac: item.additional_cost_per_unit,
+            total_cost: item.total_amount
+          }))
         });
       }
     });
 
     return volumeItems;
-  }, [data.overall, volumeScenarios]);
+  }, [items, hasVolumeScenarios]);
 
-  // Filter items for dropdown
-  const filteredForDropdown = useMemo(() => {
-    if (!searchTerm.trim()) return volumeItems;
+  // Get unique BOM instances for column headers (sorted by quantity)
+  const uniqueBOMInstances = useMemo(() => {
+    const instances = new Map<string, { id: string; qty: number; code: string; label: string }>();
 
-    const filter = searchTerm.toLowerCase();
-    return volumeItems.filter(item =>
-      item.itemName.toLowerCase().includes(filter) ||
-      item.itemCode.toLowerCase().includes(filter)
-    );
-  }, [volumeItems, searchTerm]);
-
-  // Filter items for table and chart
-  const filteredVolumeItems = useMemo(() => {
-    if (selectedItems.length === 0) return volumeItems;
-    return volumeItems.filter(item => selectedItems.includes(item.itemCode));
-  }, [volumeItems, selectedItems]);
-
-  // Get all unique AC names across all items and instances
-  const allACNames = useMemo(() => {
-    const names = new Set<string>();
-    filteredVolumeItems.forEach(item => {
-      item.instances.forEach(instance => {
-        instance.additionalCosts.forEach(ac => {
-          names.add(ac.name);
-        });
+    volumeAnalysisData.forEach(item => {
+      item.instances.forEach(inst => {
+        if (!instances.has(inst.bom_instance_id)) {
+          instances.set(inst.bom_instance_id, {
+            id: inst.bom_instance_id,
+            qty: inst.bom_instance_qty,
+            code: inst.bom_code,
+            label: `${inst.bom_code} @ ${inst.bom_instance_qty}`
+          });
+        }
       });
     });
-    return Array.from(names);
-  }, [filteredVolumeItems]);
 
-  // Simple chart data - just low vs high side by side
-  const chartData = useMemo(() => {
-    return filteredVolumeItems.slice(0, 15).map(item => ({
-      itemName: item.itemCode,
-      lowVolume: item.instances[0].quotedRate,
-      highVolume: item.instances[item.instances.length - 1].quotedRate
-    }));
-  }, [filteredVolumeItems]);
+    return Array.from(instances.values()).sort((a, b) => a.qty - b.qty);
+  }, [volumeAnalysisData]);
 
-  const handleItemToggle = (itemCode: string) => {
-    setSelectedItems(prev => {
-      if (prev.includes(itemCode)) {
-        return prev.filter(code => code !== itemCode);
+  // Apply filters
+  const filteredData = useMemo(() => {
+    let result = [...volumeAnalysisData];
+
+    // Vendor filter
+    if (!selectedVendors.includes('all')) {
+      result = result.filter(item =>
+        item.vendor_name && selectedVendors.includes(item.vendor_name)
+      );
+    }
+
+    // Tags filter
+    if (!selectedTags.includes('all')) {
+      result = result.filter(item =>
+        item.tags.some(tag => selectedTags.includes(tag))
+      );
+    }
+
+    // BOM hierarchy filter
+    if (!selectedBOMs.includes('all')) {
+      result = result.filter(item =>
+        selectedBOMs.some(bom =>
+          item.bom_path === bom ||
+          item.bom_path.startsWith(bom + ' > ')
+        )
+      );
+    }
+
+    // Search filter
+    if (tableSearch.trim()) {
+      const search = tableSearch.toLowerCase();
+      result = result.filter(item =>
+        item.item_code.toLowerCase().includes(search) ||
+        item.item_name.toLowerCase().includes(search) ||
+        (item.vendor_name && item.vendor_name.toLowerCase().includes(search)) ||
+        item.bom_path.toLowerCase().includes(search)
+      );
+    }
+
+    return result;
+  }, [volumeAnalysisData, selectedVendors, selectedTags, selectedBOMs, tableSearch]);
+
+  // Get value for current view
+  const getValue = (instance: typeof volumeAnalysisData[0]['instances'][0]) => {
+    switch (selectedView) {
+      case 'quoted_rate': return instance.quoted_rate;
+      case 'vendor_rate': return instance.vendor_rate;
+      case 'base_rate': return instance.base_rate;
+      case 'total_ac': return instance.total_ac;
+      case 'total_cost': return instance.total_cost;
+      default: return instance.quoted_rate;
+    }
+  };
+
+  // Calculate change for sorting
+  const getChange = (item: typeof volumeAnalysisData[0]) => {
+    if (item.instances.length < 2) return 0;
+    const first = getValue(item.instances[0]);
+    const last = getValue(item.instances[item.instances.length - 1]);
+    if (first === 0) return 0;
+    return ((last - first) / first) * 100;
+  };
+
+  // Sort data
+  const sortedData = useMemo(() => {
+    const sorted = [...filteredData];
+
+    sorted.sort((a, b) => {
+      let aVal: number | string;
+      let bVal: number | string;
+
+      if (sortColumn === 'change_percent') {
+        aVal = getChange(a);
+        bVal = getChange(b);
+      } else if (sortColumn === 'item_code') {
+        aVal = a.item_code;
+        bVal = b.item_code;
+      } else if (sortColumn === 'item_name') {
+        aVal = a.item_name;
+        bVal = b.item_name;
+      } else if (sortColumn === 'vendor_name') {
+        aVal = a.vendor_name || '';
+        bVal = b.vendor_name || '';
+      } else if (sortColumn === 'bom_path') {
+        aVal = a.bom_path || '';
+        bVal = b.bom_path || '';
       } else {
-        return [...prev, itemCode];
+        // Instance column - sort by value in that instance
+        const instA = a.instances.find(i => i.bom_instance_id === sortColumn);
+        const instB = b.instances.find(i => i.bom_instance_id === sortColumn);
+        aVal = instA ? getValue(instA) : 0;
+        bVal = instB ? getValue(instB) : 0;
       }
+
+      if (typeof aVal === 'string' && typeof bVal === 'string') {
+        const cmp = aVal.localeCompare(bVal);
+        return sortDirection === 'asc' ? cmp : -cmp;
+      }
+
+      const cmp = (aVal as number) - (bVal as number);
+      return sortDirection === 'asc' ? cmp : -cmp;
     });
-    setSearchTerm('');
-    setShowDropdown(false);
+
+    return sorted;
+  }, [filteredData, sortColumn, sortDirection, selectedView]);
+
+  // Pagination
+  const totalPages = Math.ceil(sortedData.length / pageSize);
+  const paginatedData = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return sortedData.slice(start, start + pageSize);
+  }, [sortedData, currentPage, pageSize]);
+
+  // Reset page on filter change
+  React.useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedVendors, selectedTags, tableSearch, selectedView]);
+
+  // Handle sort
+  const handleSort = (column: string) => {
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortColumn(column);
+      setSortDirection('desc');
+    }
   };
 
-  const handleRemoveItem = (itemCode: string) => {
-    setSelectedItems(prev => prev.filter(code => code !== itemCode));
+  // Render sort indicator
+  const renderSortIndicator = (column: string) => {
+    if (sortColumn !== column) {
+      return <span className="text-gray-400 ml-1 text-[10px]">sort</span>;
+    }
+    return sortDirection === 'asc'
+      ? <span className="text-blue-600 ml-1 text-[10px] font-bold">ASC</span>
+      : <span className="text-blue-600 ml-1 text-[10px] font-bold">DESC</span>;
   };
 
-  // No volume scenarios detected
-  if (volumeScenarios.size === 0 || volumeItems.length === 0) {
+  // Check for active filters
+  const hasActiveFilters = !selectedVendors.includes('all') || !selectedTags.includes('all') || !selectedBOMs.includes('all') || tableSearch.trim() !== '';
+
+  // Clear all filters
+  const handleClearAllFilters = () => {
+    setSelectedVendors(['all']);
+    setSelectedTags(['all']);
+    setSelectedBOMs(['all']);
+    setTableSearch('');
+    if (onClearAllFilters) onClearAllFilters();
+  };
+
+  // Summary stats
+  const stats = useMemo(() => {
+    const cheaperAtScale = filteredData.filter(item => getChange(item) < -0.01).length;
+    const moreExpensive = filteredData.filter(item => getChange(item) > 0.01).length;
+    const unchanged = filteredData.length - cheaperAtScale - moreExpensive;
+
+    return { total: filteredData.length, cheaperAtScale, moreExpensive, unchanged };
+  }, [filteredData, selectedView]);
+
+  // Chart data for selected items
+  const chartData = useMemo(() => {
+    // Get top items to show in chart (by absolute change)
+    const topItems = [...filteredData]
+      .sort((a, b) => Math.abs(getChange(b)) - Math.abs(getChange(a)))
+      .slice(0, 8);
+
+    // Create data for each BOM instance quantity
+    return uniqueBOMInstances.map(inst => {
+      const dataPoint: Record<string, number | string> = {
+        name: `${inst.qty} units`,
+        qty: inst.qty
+      };
+
+      topItems.forEach(item => {
+        const instance = item.instances.find(i => i.bom_instance_id === inst.id);
+        if (instance) {
+          dataPoint[item.item_code] = getValue(instance);
+        }
+      });
+
+      return dataPoint;
+    });
+  }, [filteredData, uniqueBOMInstances, selectedView]);
+
+  // No volume scenarios
+  if (!hasVolumeScenarios || volumeAnalysisData.length === 0) {
     return (
       <Card className="border-gray-200">
         <CardContent className="p-8 text-center">
@@ -346,398 +449,609 @@ export default function ItemVolumeAnalysisView({
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <Card className="border-blue-300 bg-blue-50">
-        <CardContent className="p-4">
-          <div className="flex items-center justify-between">
+      {/* Filter Alert Bar */}
+      {hasActiveFilters && (
+        <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4 flex items-center justify-between sticky top-0 z-30 shadow-md">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
+              <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+              </svg>
+            </div>
             <div>
-              <h3 className="font-semibold text-blue-900 text-sm">ITEM VOLUME ANALYSIS</h3>
-              <p className="text-blue-700 text-xs mt-1">
-                Comparing items across different BOM quantities: {Array.from(volumeScenarios.keys()).join(', ')}
+              <p className="font-bold text-orange-800">Filters Active</p>
+              <p className="text-sm text-orange-600">
+                Showing {filteredData.length} of {volumeAnalysisData.length} items
+                {!selectedVendors.includes('all') && ` | Vendor: ${selectedVendors.join(', ')}`}
+                {!selectedTags.includes('all') && ` | Category: ${selectedTags.join(', ')}`}
+                {tableSearch && ` | Search: "${tableSearch}"`}
               </p>
             </div>
-            <div className="text-right">
-              <div className="text-xs text-blue-700">Items Found</div>
-              <div className="text-2xl font-bold text-blue-900">{volumeItems.length}</div>
-            </div>
           </div>
-        </CardContent>
-      </Card>
+          <button
+            onClick={handleClearAllFilters}
+            className="px-4 py-2 text-sm font-bold text-white bg-red-600 rounded-lg hover:bg-red-700"
+          >
+            Reset All
+          </button>
+        </div>
+      )}
 
-      {/* Filter with Autocomplete */}
-      <Card className="border-gray-200">
-        <CardContent className="p-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-4">
-              <label className="text-xs font-semibold text-gray-700">Filter Items:</label>
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => {
-                    setSearchTerm(e.target.value);
-                    setShowDropdown(true);
-                  }}
-                  onFocus={() => setShowDropdown(true)}
-                  placeholder="Search and select items..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-
-                {/* Dropdown */}
-                {showDropdown && searchTerm && filteredForDropdown.length > 0 && (
-                  <div className="absolute z-20 w-full mt-1 bg-white border border-gray-300 rounded shadow-lg max-h-60 overflow-y-auto">
-                    {filteredForDropdown.map(item => (
-                      <button
-                        key={item.itemCode}
-                        onClick={() => handleItemToggle(item.itemCode)}
-                        className="w-full px-3 py-2 text-left text-xs hover:bg-blue-50 border-b border-gray-100 last:border-b-0"
-                      >
-                        <div className="font-semibold text-gray-900">{item.itemCode}</div>
-                        <div className="text-gray-600">{item.itemName}</div>
-                        <div className="text-gray-500 text-xs">
-                          {item.vendor} | Change: {item.perUnitChangePercent > 0 ? '+' : ''}{item.perUnitChangePercent.toFixed(1)}%
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {selectedItems.length > 0 && (
-                <button
-                  onClick={() => setSelectedItems([])}
-                  className="px-3 py-2 text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 rounded"
-                >
-                  Clear All
-                </button>
-              )}
-
-              <div className="text-xs text-gray-600">
-                {selectedItems.length > 0 ? `${selectedItems.length} selected` : 'All items'}
-              </div>
-            </div>
-
-            {/* Selected Items Tags */}
-            {selectedItems.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {selectedItems.map(itemCode => {
-                  const item = volumeItems.find(i => i.itemCode === itemCode);
-                  return item ? (
-                    <div key={itemCode} className="inline-flex items-center gap-2 px-3 py-1 bg-blue-100 text-blue-800 rounded text-xs">
-                      <span>{item.itemCode} - {item.itemName.substring(0, 30)}{item.itemName.length > 30 ? '...' : ''}</span>
-                      <button
-                        onClick={() => handleRemoveItem(itemCode)}
-                        className="hover:text-blue-900 font-bold"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ) : null;
-                })}
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Key Metrics */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-4 gap-4">
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Total Items</div>
-            <div className="text-2xl font-bold text-blue-600">{filteredVolumeItems.length}</div>
-            <div className="text-xs text-gray-500 mt-1">{selectedItems.length > 0 ? 'selected' : 'total items'}</div>
+            <div className="text-sm font-bold text-gray-700 mb-1">Total Items</div>
+            <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
+            <div className="text-xs text-gray-500 mt-1">with volume scenarios</div>
           </CardContent>
         </Card>
-
-        <Card className="border-gray-200">
+        <Card className="border-gray-200 bg-green-50">
           <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">BOM Configurations</div>
-            <div className="text-2xl font-bold text-green-600">{bomInstances.length}</div>
-            <div className="text-xs text-gray-500 mt-1">instances compared</div>
+            <div className="text-sm font-bold text-green-700 mb-1">Cheaper at Scale</div>
+            <div className="text-2xl font-bold text-green-600">{stats.cheaperAtScale}</div>
+            <div className="text-xs text-green-600 mt-1">
+              {stats.total > 0 ? `${((stats.cheaperAtScale / stats.total) * 100).toFixed(0)}%` : '0%'} of items
+            </div>
           </CardContent>
         </Card>
-
+        <Card className="border-gray-200 bg-red-50">
+          <CardContent className="p-4">
+            <div className="text-sm font-bold text-red-700 mb-1">More Expensive</div>
+            <div className="text-2xl font-bold text-red-600">{stats.moreExpensive}</div>
+            <div className="text-xs text-red-600 mt-1">
+              {stats.total > 0 ? `${((stats.moreExpensive / stats.total) * 100).toFixed(0)}%` : '0%'} of items
+            </div>
+          </CardContent>
+        </Card>
         <Card className="border-gray-200">
           <CardContent className="p-4">
-            <div className="text-xs font-semibold text-gray-600 mb-1">Items Cheaper at Scale</div>
-            <div className="text-2xl font-bold text-green-600">
-              {filteredVolumeItems.filter(item => item.perUnitChangePercent < 0).length}
-            </div>
-            <div className="text-xs text-gray-500 mt-1">
-              vs {filteredVolumeItems.filter(item => item.perUnitChangePercent > 0).length} more expensive
-            </div>
+            <div className="text-sm font-bold text-gray-700 mb-1">BOM Instances</div>
+            <div className="text-2xl font-bold text-cyan-600">{uniqueBOMInstances.length}</div>
+            <div className="text-xs text-gray-500 mt-1">volume configurations</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Simple Chart - Low vs High Comparison */}
-      {filteredVolumeItems.length > 0 && (
-        <Card className="border-gray-200">
-          <CardContent className="p-4">
-            <h4 className="font-semibold text-gray-900 mb-3 text-sm">Low Volume vs High Volume Comparison</h4>
-            <p className="text-xs text-gray-600 mb-3">
-              Direct comparison of quoted rates. First 15 items shown.
-            </p>
+      {/* Filters and View Selection */}
+      <Card className="border-gray-300">
+        <CardContent className="p-4">
+          <div className="flex items-center gap-4 flex-wrap">
+            {/* View Selector */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'view' ? null : 'view'); }}
+                className="flex items-center gap-2 px-3 py-2 border border-blue-500 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium"
+              >
+                <span>View: {VIEW_OPTIONS.find(v => v.value === selectedView)?.label}</span>
+                <span className="text-gray-400">▼</span>
+              </button>
 
-            <ResponsiveContainer width="100%" height={400}>
-              <BarChart data={chartData} margin={{ top: 20, right: 30, bottom: 60, left: 60 }} barGap={8} barCategoryGap="20%">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis
-                  dataKey="itemName"
-                  angle={-45}
-                  textAnchor="end"
-                  height={80}
-                  tick={{ fontSize: 10 }}
-                  interval={0}
-                />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  tickFormatter={(value) => `$${value}`}
-                  label={{ value: 'Quoted Rate', angle: -90, position: 'insideLeft', style: { fontSize: 12 } }}
-                />
-                <Tooltip
-                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                  formatter={(value: number) => `$${value.toFixed(2)}`}
-                />
-                <Bar dataKey="lowVolume" name="Low Volume" fill="#ef4444" barSize={20} />
-                <Bar dataKey="highVolume" name="High Volume" fill="#10b981" barSize={20} />
-              </BarChart>
-            </ResponsiveContainer>
+              {openDropdown === 'view' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-72">
+                  <div className="p-2">
+                    {VIEW_OPTIONS.map(option => (
+                      <button
+                        key={option.value}
+                        onClick={() => { setSelectedView(option.value); setOpenDropdown(null); }}
+                        className={`w-full text-left px-3 py-2 rounded text-sm hover:bg-gray-100 ${
+                          selectedView === option.value ? 'bg-blue-50 text-blue-700' : ''
+                        }`}
+                      >
+                        <div className="font-medium">{option.label}</div>
+                        <div className="text-xs text-gray-500">{option.description}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
-            {filteredVolumeItems.length > 15 && (
-              <div className="mt-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-900">
-                Showing first 15 items. Use filter to see specific items.
-              </div>
+            <div className="h-6 w-px bg-gray-300" />
+
+            {/* Search */}
+            <div className="relative flex-1 max-w-xs">
+              <input
+                type="text"
+                placeholder="Search items..."
+                value={tableSearch}
+                onChange={(e) => setTableSearch(e.target.value)}
+                className="w-full pl-8 pr-8 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <svg className="absolute left-2.5 top-2.5 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              {tableSearch && (
+                <button onClick={() => setTableSearch('')} className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600">
+                  x
+                </button>
+              )}
+            </div>
+
+            {/* Vendor Filter */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'vendor' ? null : 'vendor'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${
+                  !selectedVendors.includes('all') ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Vendor</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedVendors.includes('all') ? 'All' : selectedVendors.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'vendor' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search vendors..."
+                      value={vendorSearch}
+                      onChange={(e) => setVendorSearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedVendors.includes('all')}
+                        onChange={() => setSelectedVendors(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All Vendors</span>
+                    </label>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {filters.vendor_list
+                      .filter(v => !vendorSearch || v.vendor_name.toLowerCase().includes(vendorSearch.toLowerCase()))
+                      .map(vendor => (
+                        <label key={vendor.vendor_id} className="flex items-center gap-2 px-4 py-1.5 hover:bg-gray-100 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedVendors.includes(vendor.vendor_name)}
+                            onChange={() => setSelectedVendors(toggleSelection(selectedVendors, vendor.vendor_name))}
+                            className="rounded border-gray-300"
+                          />
+                          <span className="text-sm text-gray-700">{vendor.vendor_name}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedVendors(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Category Filter */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'tags' ? null : 'tags'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${
+                  !selectedTags.includes('all') ? 'border-purple-500 bg-purple-50 text-purple-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>Category</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedTags.includes('all') ? 'All' : selectedTags.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'tags' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search categories..."
+                      value={tagSearch}
+                      onChange={(e) => setTagSearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedTags.includes('all')}
+                        onChange={() => setSelectedTags(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All Categories</span>
+                    </label>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto py-1">
+                    {(filters.tag_list || [])
+                      .filter(tag => !tagSearch || tag.toLowerCase().includes(tagSearch.toLowerCase()))
+                      .map(tag => (
+                        <label key={tag} className="flex items-center gap-2 px-4 py-1.5 hover:bg-gray-100 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={selectedTags.includes(tag)}
+                            onChange={() => setSelectedTags(toggleSelection(selectedTags, tag))}
+                            className="rounded border-gray-300"
+                          />
+                          <span className="text-sm text-gray-700">{tag}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedTags(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* BOM Hierarchy Filter */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'bom' ? null : 'bom'); }}
+                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${
+                  !selectedBOMs.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                <span>BOM</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
+                  {selectedBOMs.includes('all') ? 'All' : selectedBOMs.length}
+                </span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'bom' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-72">
+                  <div className="p-2 border-b border-gray-200">
+                    <input
+                      type="text"
+                      placeholder="Search BOMs..."
+                      value={bomSearch}
+                      onChange={(e) => setBomSearch(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                  <div className="px-2 py-2 border-b border-gray-100">
+                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedBOMs.includes('all')}
+                        onChange={() => setSelectedBOMs(['all'])}
+                        className="rounded border-gray-300"
+                      />
+                      <span className="text-sm font-medium text-gray-900">All BOMs</span>
+                    </label>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto py-1">
+                    {bomHierarchy.paths
+                      .filter(bom => !bomSearch || bom.path.toLowerCase().includes(bomSearch.toLowerCase()))
+                      .map(bom => (
+                        <label
+                          key={bom.path}
+                          className={`flex items-center gap-2 px-4 py-1.5 hover:bg-gray-100 cursor-pointer ${
+                            selectedBOMs.includes(bom.path) ? 'bg-blue-50' : ''
+                          }`}
+                          style={{ paddingLeft: `${16 + bom.level * 16}px` }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedBOMs.includes(bom.path)}
+                            onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, bom.path))}
+                            className="rounded border-gray-300"
+                          />
+                          <span className="text-sm text-gray-700 font-mono">{bom.label}</span>
+                        </label>
+                      ))}
+                  </div>
+                  <div className="p-2 border-t border-gray-200 flex justify-between">
+                    <button onClick={() => setSelectedBOMs(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {hasActiveFilters && (
+              <button
+                onClick={handleClearAllFilters}
+                className="px-3 py-2 text-xs bg-red-50 text-red-600 border border-red-200 rounded-lg hover:bg-red-100 font-medium"
+              >
+                Clear All
+              </button>
             )}
-          </CardContent>
-        </Card>
-      )}
 
-      {/* Full Comparison Table */}
-      <Card className="border-gray-300 shadow-sm">
-        <CardContent className="p-0">
-          <div className="bg-gray-50 px-4 py-3 border-b border-gray-300">
-            <h4 className="font-semibold text-gray-900 text-sm">Complete Item Comparison</h4>
-            <p className="text-xs text-gray-600 mt-1">Full breakdown of all cost components across volume scenarios</p>
+            <div className="h-6 w-px bg-gray-300 ml-auto" />
+
+            {/* Display Mode Toggle */}
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setDisplayMode('table')}
+                className={`px-3 py-1.5 text-xs font-medium rounded ${
+                  displayMode === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Table
+              </button>
+              <button
+                onClick={() => setDisplayMode('chart')}
+                className={`px-3 py-1.5 text-xs font-medium rounded ${
+                  displayMode === 'chart' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Chart
+              </button>
+            </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm border-collapse">
-              <thead>
-                <tr className="bg-gray-100 border-b-2 border-gray-400">
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300 text-xs sticky left-0 bg-gray-100 z-10" style={{ minWidth: '150px' }}>
-                    Item
-                  </th>
-                  <th className="px-3 py-2 text-left font-semibold text-gray-700 border-r border-gray-300 text-xs" style={{ minWidth: '120px' }}>
-                    Cost Component
-                  </th>
-                  {bomInstances.map((bom, idx) => (
-                    <th key={idx} className="px-3 py-2 text-center font-semibold text-gray-700 border-r border-gray-300 text-xs" style={{ minWidth: '120px' }}>
-                      {bom.label}
-                    </th>
-                  ))}
-                  <th className="px-3 py-2 text-center font-semibold text-gray-700 text-xs" style={{ minWidth: '100px' }}>
-                    Change %
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white">
-                {filteredVolumeItems.map((item, itemIdx) => {
-                  const rowCount = 5 + allACNames.length;
+          {/* Active Filter Pills */}
+          {hasActiveFilters && (
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              <span className="text-xs text-gray-500">Active filters:</span>
 
-                  return (
-                    <>
-                      {/* Vendor Rate */}
-                      <tr key={`${itemIdx}-vendor`} className={`border-b border-gray-200 hover:bg-gray-50 ${itemIdx > 0 ? 'border-t-2 border-t-gray-400' : ''}`}>
-                        <td className="px-3 py-2 font-mono text-gray-700 border-r border-gray-200 text-xs sticky left-0 bg-white z-10" rowSpan={rowCount}>
-                          <div className="font-semibold">{item.itemCode}</div>
-                          <div className="text-xs text-gray-600 mt-1">{item.itemName}</div>
-                          <div className="text-xs text-gray-500 mt-1">
-                            <button
-                              onClick={() => navigateToTab('items', { selectedVendor: item.vendor })}
-                              className="text-blue-700 hover:underline"
-                            >
-                              {item.vendor}
-                            </button>
-                            {' | '}
-                            <button
-                              onClick={() => navigateToTab('items', { selectedCategory: item.category })}
-                              className="text-blue-700 hover:underline"
-                            >
-                              {item.category}
-                            </button>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-gray-700 border-r border-gray-200 text-xs">
-                          Vendor Rate
-                        </td>
-                        {bomInstances.map((bom, bomIdx) => {
-                          const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                          const firstInstance = item.instances[0];
-                          const isDifferent = instance && firstInstance && Math.abs(instance.vendorRate - firstInstance.vendorRate) > 0.01;
-                          return (
-                            <td key={bomIdx} className={`px-3 py-2 text-center font-mono text-gray-700 border-r border-gray-200 text-xs ${
-                              isDifferent ? (instance.vendorRate < firstInstance.vendorRate ? 'bg-green-50' : 'bg-red-50') : ''
-                            }`}>
-                              {instance ? `$${instance.vendorRate.toFixed(2)}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-2 text-center font-mono text-gray-600 text-xs">
-                          {item.instances.length >= 2 ?
-                            `${((item.instances[item.instances.length - 1].vendorRate - item.instances[0].vendorRate) / item.instances[0].vendorRate * 100).toFixed(1)}%`
-                            : '—'}
-                        </td>
-                      </tr>
+              {!selectedVendors.includes('all') && selectedVendors.map(vendor => (
+                <span key={vendor} className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
+                  Vendor: {vendor}
+                  <button onClick={() => {
+                    const newVendors = selectedVendors.filter(v => v !== vendor);
+                    setSelectedVendors(newVendors.length ? newVendors : ['all']);
+                  }} className="hover:text-green-900 font-bold">×</button>
+                </span>
+              ))}
 
-                      {/* Base Rate */}
-                      <tr key={`${itemIdx}-base`} className="border-b border-gray-200 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-700 border-r border-gray-200 text-xs">
-                          Base Rate
-                        </td>
-                        {bomInstances.map((bom, bomIdx) => {
-                          const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                          const firstInstance = item.instances[0];
-                          const isDifferent = instance && firstInstance && Math.abs(instance.baseRate - firstInstance.baseRate) > 0.01;
-                          return (
-                            <td key={bomIdx} className={`px-3 py-2 text-center font-mono text-gray-700 border-r border-gray-200 text-xs ${
-                              isDifferent ? (instance.baseRate < firstInstance.baseRate ? 'bg-green-50' : 'bg-red-50') : ''
-                            }`}>
-                              {instance ? `$${instance.baseRate.toFixed(2)}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-2 text-center font-mono text-gray-600 text-xs">
-                          {item.instances.length >= 2 ?
-                            `${((item.instances[item.instances.length - 1].baseRate - item.instances[0].baseRate) / item.instances[0].baseRate * 100).toFixed(1)}%`
-                            : '—'}
-                        </td>
-                      </tr>
+              {!selectedTags.includes('all') && selectedTags.map(tag => (
+                <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
+                  Category: {tag}
+                  <button onClick={() => {
+                    const newTags = selectedTags.filter(t => t !== tag);
+                    setSelectedTags(newTags.length ? newTags : ['all']);
+                  }} className="hover:text-purple-900 font-bold">×</button>
+                </span>
+              ))}
 
-                      {/* Additional Costs */}
-                      {allACNames.map((acName, acIdx) => (
-                        <tr key={`${itemIdx}-ac-${acIdx}`} className="border-b border-gray-200 hover:bg-gray-50">
-                          <td className="px-3 py-2 text-gray-700 border-r border-gray-200 text-xs">
-                            {acName}
+              {!selectedBOMs.includes('all') && selectedBOMs.map(bom => (
+                <span key={bom} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                  BOM: {bom.split(' > ').pop()}
+                  <button onClick={() => {
+                    const newBOMs = selectedBOMs.filter(b => b !== bom);
+                    setSelectedBOMs(newBOMs.length ? newBOMs : ['all']);
+                  }} className="hover:text-blue-900 font-bold">×</button>
+                </span>
+              ))}
+
+              {tableSearch && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
+                  Search: "{tableSearch}"
+                  <button onClick={() => setTableSearch('')} className="hover:text-gray-900 font-bold">×</button>
+                </span>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* TABLE VIEW */}
+      {displayMode === 'table' && (
+        <>
+          <Card className="border-gray-300 shadow-sm">
+            <CardContent className="p-0">
+              <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-gray-900 text-sm">
+                    {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison
+                  </h4>
+                  <p className="text-xs text-gray-600 mt-0.5">
+                    {VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
+                  </p>
+                </div>
+                <div className="text-xs text-gray-600">
+                  Showing {paginatedData.length} of {filteredData.length} items
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-gray-100 border-b border-gray-300">
+                      <th
+                        className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200 sticky left-0 bg-gray-100 z-10"
+                        onClick={() => handleSort('item_code')}
+                        style={{ minWidth: '120px' }}
+                      >
+                        Item Code {renderSortIndicator('item_code')}
+                      </th>
+                      <th
+                        className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
+                        onClick={() => handleSort('item_name')}
+                        style={{ minWidth: '180px' }}
+                      >
+                        Item Name {renderSortIndicator('item_name')}
+                      </th>
+                      <th
+                        className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
+                        onClick={() => handleSort('vendor_name')}
+                        style={{ minWidth: '100px' }}
+                      >
+                        Vendor {renderSortIndicator('vendor_name')}
+                      </th>
+                      <th
+                        className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
+                        onClick={() => handleSort('bom_path')}
+                        style={{ minWidth: '150px' }}
+                      >
+                        BOM Hierarchy {renderSortIndicator('bom_path')}
+                      </th>
+                      {uniqueBOMInstances.map(inst => (
+                        <th
+                          key={inst.id}
+                          className="px-4 py-3 text-right font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
+                          onClick={() => handleSort(inst.id)}
+                          style={{ minWidth: '120px' }}
+                        >
+                          {inst.label} {renderSortIndicator(inst.id)}
+                        </th>
+                      ))}
+                      <th
+                        className="px-4 py-3 text-right font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
+                        onClick={() => handleSort('change_percent')}
+                        style={{ minWidth: '100px' }}
+                      >
+                        Change % {renderSortIndicator('change_percent')}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {paginatedData.map((item, idx) => {
+                      const change = getChange(item);
+                      const firstValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
+
+                      return (
+                        <tr key={item.item_code} className={`border-b border-gray-200 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                          <td className="px-4 py-3 font-mono text-blue-600 sticky left-0 bg-inherit z-10">
+                            {item.item_code}
                           </td>
-                          {bomInstances.map((bom, bomIdx) => {
-                            const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                            const ac = instance?.additionalCosts.find(a => a.name === acName);
-                            const firstInstance = item.instances[0];
-                            const firstAC = firstInstance?.additionalCosts.find(a => a.name === acName);
-                            const isDifferent = ac && firstAC && Math.abs(ac.perUnitValue - firstAC.perUnitValue) > 0.01;
+                          <td className="px-4 py-3 text-gray-900">
+                            <div className="truncate max-w-[200px]" title={item.item_name}>
+                              {item.item_name}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-gray-700">
+                            {item.vendor_name || '-'}
+                          </td>
+                          <td className="px-4 py-3 text-blue-700 font-mono text-xs">
+                            <span title={item.bom_path}>{item.bom_path}</span>
+                          </td>
+                          {uniqueBOMInstances.map(inst => {
+                            const instance = item.instances.find(i => i.bom_instance_id === inst.id);
+                            const value = instance ? getValue(instance) : null;
+                            const isDifferent = value !== null && firstValue !== 0 && Math.abs(value - firstValue) / firstValue > 0.001;
+                            const isCheaper = value !== null && value < firstValue;
+
                             return (
-                              <td key={bomIdx} className={`px-3 py-2 text-center font-mono text-gray-700 border-r border-gray-200 text-xs ${
-                                isDifferent ? (ac.perUnitValue < firstAC.perUnitValue ? 'bg-green-50' : 'bg-red-50') : ''
-                              }`}>
-                                {ac ? (
-                                  <>
-                                    ${ac.perUnitValue.toFixed(2)}
-                                    <div className="text-xs text-gray-500">({ac.allocationType})</div>
-                                  </>
-                                ) : '—'}
+                              <td
+                                key={inst.id}
+                                className={`px-4 py-3 text-right font-mono ${
+                                  isDifferent
+                                    ? isCheaper
+                                      ? 'bg-green-50 text-green-700'
+                                      : 'bg-red-50 text-red-700'
+                                    : 'text-gray-900'
+                                }`}
+                              >
+                                {value !== null
+                                  ? `${currencySymbol}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                  : '-'
+                                }
                               </td>
                             );
                           })}
-                          <td className="px-3 py-2 text-center font-mono text-xs">
-                            {(() => {
-                              const firstInstance = item.instances.find(i => i.additionalCosts.find(a => a.name === acName));
-                              const lastInstance = item.instances[item.instances.length - 1];
-                              const firstAC = firstInstance?.additionalCosts.find(a => a.name === acName);
-                              const lastAC = lastInstance?.additionalCosts.find(a => a.name === acName);
-
-                              if (!firstAC && lastAC) return <span className="text-blue-600">NEW</span>;
-                              if (firstAC && !lastAC) return <span className="text-orange-600">REMOVED</span>;
-                              if (firstAC && lastAC) {
-                                const change = ((lastAC.perUnitValue - firstAC.perUnitValue) / firstAC.perUnitValue * 100);
-                                return (
-                                  <span className={change < 0 ? 'text-green-600' : change > 0 ? 'text-red-600' : 'text-gray-600'}>
-                                    {change.toFixed(1)}%
-                                  </span>
-                                );
-                              }
-                              return '—';
-                            })()}
+                          <td className={`px-4 py-3 text-right font-mono font-semibold ${
+                            change < -0.01 ? 'text-green-600' : change > 0.01 ? 'text-red-600' : 'text-gray-600'
+                          }`}>
+                            {change < -0.01 ? '' : change > 0.01 ? '+' : ''}{change.toFixed(1)}%
                           </td>
                         </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600">Rows per page:</span>
+                    <select
+                      value={pageSize}
+                      onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                      className="px-2 py-1 border border-gray-300 rounded text-xs"
+                    >
+                      <option value={10}>10</option>
+                      <option value={20}>20</option>
+                      <option value={50}>50</option>
+                      <option value={100}>100</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-600">
+                      Page {currentPage} of {totalPages}
+                    </span>
+                    <button
+                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                      disabled={currentPage === 1}
+                      className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      Prev
+                    </button>
+                    <button
+                      onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                      disabled={currentPage === totalPages}
+                      className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+        </>
+      )}
+
+      {/* CHART VIEW */}
+      {displayMode === 'chart' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Price Trend Chart */}
+          <Card className="border-gray-300 shadow-sm lg:col-span-2">
+            <CardContent className="p-4">
+              <h4 className="font-bold text-gray-900 text-sm mb-4">
+                {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Trend Across Volumes
+              </h4>
+              <div className="h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${currencySymbol}${v}`} />
+                    <Tooltip
+                      formatter={(value: number) => [`${currencySymbol}${value.toFixed(2)}`, '']}
+                      labelStyle={{ fontWeight: 'bold' }}
+                    />
+                    <Legend />
+                    {[...filteredData]
+                      .sort((a, b) => Math.abs(getChange(b)) - Math.abs(getChange(a)))
+                      .slice(0, 8)
+                      .map((item, idx) => (
+                        <Line
+                          key={item.item_code}
+                          type="monotone"
+                          dataKey={item.item_code}
+                          name={item.item_code}
+                          stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                          strokeWidth={2}
+                          dot={{ r: 4 }}
+                          activeDot={{ r: 6 }}
+                        />
                       ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="text-xs text-gray-500 mt-2">
+                Showing top 8 items with highest price variation across volumes
+              </p>
+            </CardContent>
+          </Card>
 
-                      {/* Taxes */}
-                      <tr key={`${itemIdx}-taxes`} className="border-b border-gray-200 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-700 border-r border-gray-200 text-xs">
-                          Taxes
-                        </td>
-                        {bomInstances.map((bom, bomIdx) => {
-                          const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                          const firstInstance = item.instances[0];
-                          const isDifferent = instance && firstInstance && Math.abs(instance.taxes - firstInstance.taxes) > 0.01;
-                          return (
-                            <td key={bomIdx} className={`px-3 py-2 text-center font-mono text-gray-700 border-r border-gray-200 text-xs ${
-                              isDifferent ? (instance.taxes < firstInstance.taxes ? 'bg-green-50' : 'bg-red-50') : ''
-                            }`}>
-                              {instance ? `$${instance.taxes.toFixed(2)}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-2 text-center font-mono text-gray-600 text-xs">
-                          {item.instances.length >= 2 ?
-                            `${((item.instances[item.instances.length - 1].taxes - item.instances[0].taxes) / item.instances[0].taxes * 100).toFixed(1)}%`
-                            : '—'}
-                        </td>
-                      </tr>
+        </div>
+      )}
 
-                      {/* Discounts */}
-                      <tr key={`${itemIdx}-discounts`} className="border-b border-gray-200 hover:bg-gray-50">
-                        <td className="px-3 py-2 text-gray-700 border-r border-gray-200 text-xs">
-                          Discounts
-                        </td>
-                        {bomInstances.map((bom, bomIdx) => {
-                          const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                          return (
-                            <td key={bomIdx} className={`px-3 py-2 text-center font-mono text-gray-700 border-r border-gray-200 text-xs ${
-                              instance && instance.discounts > 0 ? 'bg-blue-50' : ''
-                            }`}>
-                              {instance && instance.discounts > 0 ? `-$${instance.discounts.toFixed(2)}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className="px-3 py-2 text-center font-mono text-gray-600 text-xs">
-                          {item.instances[item.instances.length - 1].discounts > 0 ? <span className="text-blue-600">NEW</span> : '—'}
-                        </td>
-                      </tr>
-
-                      {/* Quoted Rate - Final */}
-                      <tr key={`${itemIdx}-quoted`} className="border-b-2 border-gray-400 hover:bg-gray-50 bg-blue-50">
-                        <td className="px-3 py-2 font-semibold text-gray-900 border-r border-gray-200 text-xs">
-                          Quoted Rate (Final)
-                        </td>
-                        {bomInstances.map((bom, bomIdx) => {
-                          const instance = item.instances.find(i => i.bomInstanceId === bom.bomInstanceId);
-                          const firstInstance = item.instances[0];
-                          const isDifferent = instance && firstInstance && Math.abs(instance.quotedRate - firstInstance.quotedRate) > 0.01;
-                          return (
-                            <td key={bomIdx} className={`px-3 py-2 text-center font-mono font-semibold text-gray-900 border-r border-gray-200 text-xs ${
-                              isDifferent ? (instance.quotedRate < firstInstance.quotedRate ? 'bg-green-100' : 'bg-red-100') : 'bg-blue-50'
-                            }`}>
-                              {instance ? `$${instance.quotedRate.toFixed(2)}` : '—'}
-                            </td>
-                          );
-                        })}
-                        <td className={`px-3 py-2 text-center font-mono font-semibold text-xs ${
-                          item.perUnitChangePercent < 0 ? 'text-green-600' : item.perUnitChangePercent > 0 ? 'text-red-600' : 'text-gray-600'
-                        }`}>
-                          {item.perUnitChangePercent.toFixed(1)}%
-                        </td>
-                      </tr>
-                    </>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }

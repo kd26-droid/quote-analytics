@@ -5,7 +5,7 @@ import ItemsTab from './tabs/ItemsTab';
 import BOMTab from './tabs/BOMTab';
 import OverallTab from './tabs/OverallTab';
 import type { TopItemsAnalytics, Category, Vendor, AdditionalCostsBreakdown, BOMCostComparison, VendorRateDeviation } from '../../types/quote.types';
-import type { CostViewData } from '../../services/api';
+import type { CostViewData, BOMDetailData, OverallACData } from '../../services/api';
 
 export type TabType = 'summary' | 'items' | 'bom' | 'overall';
 
@@ -21,6 +21,8 @@ export interface NavigationContext {
 interface QuoteAnalyticsDashboardProps {
   data: TopItemsAnalytics;
   costViewData?: CostViewData;
+  bomDetailData?: BOMDetailData | null;
+  overallACData?: OverallACData | null;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -28,26 +30,37 @@ interface QuoteAnalyticsDashboardProps {
   additionalCosts: AdditionalCostsBreakdown;
   bomCostComparison: BOMCostComparison[];
   vendorRateDeviation: VendorRateDeviation;
+  currencySymbol?: string;
 }
 
 export default function QuoteAnalyticsDashboard({
   data,
   costViewData,
+  bomDetailData,
+  overallACData,
   totalQuoteValue,
   totalItems,
   topCategories,
   topVendors,
   additionalCosts,
   bomCostComparison,
-  vendorRateDeviation
+  vendorRateDeviation,
+  currencySymbol = '₹'
 }: QuoteAnalyticsDashboardProps) {
   const [activeTab, setActiveTab] = useState<TabType>('summary');
   const [navigationContext, setNavigationContext] = useState<NavigationContext>({});
+  const [filterResetKey, setFilterResetKey] = useState(0); // Increment to trigger filter reset in all tabs
 
   // Cross-tab navigation function
   const navigateToTab = (tab: TabType, context: NavigationContext = {}) => {
     setActiveTab(tab);
     setNavigationContext(prev => ({ ...prev, ...context }));
+  };
+
+  // Clear all filters across all tabs
+  const clearAllFilters = () => {
+    setNavigationContext({});
+    setFilterResetKey(prev => prev + 1); // This triggers useEffect in child tabs to reset their local filters
   };
 
   const tabs = [
@@ -91,6 +104,7 @@ export default function QuoteAnalyticsDashboard({
             bomCostComparison={bomCostComparison}
             additionalCosts={additionalCosts}
             navigateToTab={navigateToTab}
+            currencySymbol={currencySymbol}
           />
         )}
         {activeTab === 'items' && (
@@ -105,26 +119,32 @@ export default function QuoteAnalyticsDashboard({
             bomCostComparison={bomCostComparison}
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
+            filterResetKey={filterResetKey}
+            clearAllFilters={clearAllFilters}
+            currencySymbol={currencySymbol}
           />
         )}
         {activeTab === 'bom' && (
           <BOMTab
             data={data}
+            costViewData={costViewData}
             totalQuoteValue={totalQuoteValue}
             bomCostComparison={bomCostComparison}
+            bomDetailData={bomDetailData}
             additionalCosts={additionalCosts}
             navigationContext={navigationContext}
             navigateToTab={navigateToTab}
+            filterResetKey={filterResetKey}
+            clearAllFilters={clearAllFilters}
+            currencySymbol={currencySymbol}
           />
         )}
         {activeTab === 'overall' && (
           <OverallTab
-            totalQuoteValue={totalQuoteValue}
-            topVendors={topVendors}
-            topCategories={topCategories}
-            additionalCosts={additionalCosts}
-            vendorRateDeviation={vendorRateDeviation}
-            navigateToTab={navigateToTab}
+            overallACData={overallACData}
+            currencySymbol={currencySymbol}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
           />
         )}
       </div>

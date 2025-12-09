@@ -72,8 +72,12 @@ export interface QuoteAnalyticsHeaderData {
     deadline_datetime: string | null;
   };
   exported_events: {
-    event_ids: string[];
-    last_export_datetime: string;
+    events: Array<{
+      event_id: string;
+      event_code: string;
+      event_name: string;
+    }>;
+    last_export_datetime: string | null;
   };
 }
 
@@ -94,7 +98,7 @@ export interface AdditionalCost {
   cost_name: string;
   cost_type: 'ABSOLUTE_VALUE' | 'PERCENTAGE';
   allocation_type: 'PER_UNIT' | 'OVERALL_QUANTITY' | null;
-  cost_source: 'DEFAULT' | 'FORMULA';
+  cost_source: 'FORMULA' | 'DEFAULT' | 'ITEM' | 'VENDOR';
   total_amount: number;
   per_unit_amount: number;
 }
@@ -111,6 +115,8 @@ export interface CostViewItem {
   bom_id: string | null;
   bom_code: string;
   bom_name: string;
+  bom_instance_id: string;    // NEW: Unique ID of the BOM instance (links to BOMInstance.main_bom.entry_id)
+  bom_instance_qty: number;   // NEW: The quantity of the BOM instance (e.g., 10 or 1000)
   quantity: number;
   unit: string;
   vendor_rate: number;        // Original rate from vendor bid (in vendor's currency)
@@ -171,6 +177,69 @@ export interface CostViewData {
   filters: CostViewFilters;
 }
 
+// ============ BOM Detail API Types ============
+
+// Recurring Cost (BOM level additional cost)
+export interface RecurringCost {
+  cost_name: string;
+  cost_type: 'ABSOLUTE_VALUE' | 'PERCENTAGE' | 'TOTAL';
+  allocation_type: 'PER_UNIT' | 'OVERALL_QUANTITY' | null;
+  cost_source: 'FORMULA' | 'DEFAULT' | 'ITEM' | 'VENDOR' | null;
+  is_calculated: boolean;  // false = subtotal/gross row (exclude from totals)
+  is_agreed_manual: boolean;  // true = manually overridden
+  formula: string | null;
+  calculated_rate: number;
+  calculated_rate_per_unit: number;
+  calculated_amount: number;
+  quoted_rate: number;
+  quoted_rate_per_unit: number;
+  quoted_amount: number;
+}
+
+// BOM Level (in hierarchy)
+export interface BOMLevel {
+  bom_code: string;
+  bom_name: string;
+  bom_path: string;
+  bom_level: number;  // 0 = main, 1 = sub, 2 = sub-sub
+  bom_quantity: number;
+  parent_bom_code: string | null;
+  total_costs: number;  // Count of recurring costs
+  total_item_cost: number;  // Sum of item costs in this BOM
+  total_bom_ac_calculated: number;  // Sum of calculated_amount where is_calculated=true
+  total_bom_ac_quoted: number;  // Sum of quoted_amount where is_calculated=true
+  total_calculated_amount: number;  // total_item_cost + total_bom_ac_calculated
+  total_quoted_amount: number;  // total_item_cost + total_bom_ac_quoted
+  recurring_costs: RecurringCost[];
+}
+
+// BOM Instance
+export interface BOMInstance {
+  instance_index: number;
+  main_bom: {
+    bom_code: string;
+    bom_name: string;
+    bom_quantity: number;
+    entry_id: string;
+  };
+  total_calculated_amount: number;
+  total_quoted_amount: number;
+  hierarchy: BOMLevel[];
+}
+
+// BOM Detail Summary
+export interface BOMDetailSummary {
+  total_instances: number;
+  total_calculated_amount: number;
+  total_quoted_amount: number;
+}
+
+// Complete BOM Detail Data
+export interface BOMDetailData {
+  bom_instances: BOMInstance[];
+  summary: BOMDetailSummary;
+}
+
 // Fetch Header Data
 export const fetchQuoteAnalyticsHeader = async (
   costingSheetId: string,
@@ -229,6 +298,139 @@ export const fetchCostViewData = async (
   return data.data;
 };
 
+// Fetch BOM Detail Data
+export const fetchBOMDetailData = async (
+  costingSheetId: string,
+  token: string
+): Promise<BOMDetailData> => {
+  const response = await fetch(
+    `${API_BASE_URL}/quotes/${costingSheetId}/analytics/bom-detail/`,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to fetch BOM detail data');
+  }
+
+  return data.data;
+};
+
+// ============ Overall Additional Costs API Types ============
+
+// Individual Overall AC Cost
+export interface OverallACCost {
+  cost_name: string;
+  cost_type: 'PERCENTAGE' | 'ABSOLUTE_VALUE';
+  cost_type_display: string;  // "Percentage" or "Flat Rate"
+  cost_value: number;
+  allocation_type: string | null;
+  cost_source: 'FORMULA' | 'DEFAULT' | 'ITEM' | 'VENDOR';
+  is_calculated: boolean;  // true = included in total, false = display only
+  is_agreed_manual: boolean;
+  calculated_rate: number;
+  calculated_amount: number;
+  quoted_rate: number;
+  quoted_amount: number;
+  calculation_formula: string;  // Human readable formula
+}
+
+// Overall AC Base Amounts
+export interface OverallACBaseAmounts {
+  sum_item_totals: number;
+  sum_item_totals_description: string;
+  total_bom_ac: number;
+  total_bom_ac_description: string;
+  base_amount_for_percentage: number;
+  base_amount_description: string;
+}
+
+// Overall AC Costs Section
+export interface OverallACCostsSection {
+  description: string;
+  total_calculated?: number;
+  total_quoted?: number;
+  costs: OverallACCost[];
+}
+
+// Overall AC All Costs
+export interface OverallACAllCosts {
+  total_costs: number;
+  included_count: number;
+  display_only_count: number;
+  included_in_total: OverallACCostsSection;
+  display_only: OverallACCostsSection;
+}
+
+// Grand Total
+export interface OverallACGrandTotal {
+  calculated: number;
+  quoted: number;
+  formula: string;
+  formula_values_calculated: string;
+  formula_values_quoted: string;
+}
+
+// Cost Type Reference
+export interface CostTypeReference {
+  description: string;
+  formula: string;
+  example: string;
+}
+
+// Complete Overall AC Data
+export interface OverallACData {
+  quote_id: string;
+  quote_name: string;
+  base_amounts: OverallACBaseAmounts;
+  overall_additional_costs: OverallACAllCosts;
+  grand_total: OverallACGrandTotal;
+  cost_type_reference: {
+    PERCENTAGE: CostTypeReference;
+    ABSOLUTE_VALUE: CostTypeReference;
+  };
+}
+
+// Fetch Overall AC Data
+export const fetchOverallACData = async (
+  costingSheetId: string,
+  token: string
+): Promise<OverallACData> => {
+  const response = await fetch(
+    `${API_BASE_URL}/quotes/${costingSheetId}/analytics/overall-ac/`,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to fetch overall AC data');
+  }
+
+  return data.data;
+};
+
 // Explicit type exports for better module resolution
 export type {
   CostViewData,
@@ -238,5 +440,17 @@ export type {
   AdditionalCost,
   BOMAdditionalCost,
   OverallAdditionalCost,
-  QuoteAnalyticsHeaderData
+  QuoteAnalyticsHeaderData,
+  BOMDetailData,
+  BOMInstance,
+  BOMLevel,
+  BOMDetailSummary,
+  RecurringCost,
+  OverallACData,
+  OverallACCost,
+  OverallACBaseAmounts,
+  OverallACAllCosts,
+  OverallACCostsSection,
+  OverallACGrandTotal,
+  CostTypeReference
 };

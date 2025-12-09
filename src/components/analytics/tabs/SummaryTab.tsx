@@ -13,6 +13,7 @@ interface SummaryTabProps {
   bomCostComparison: BOMCostComparison[];
   additionalCosts: AdditionalCostsBreakdown;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
+  currencySymbol?: string;
 }
 
 const COLORS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#059669', '#0891b2'];
@@ -25,7 +26,8 @@ export default function SummaryTab({
   topVendors,
   bomCostComparison,
   additionalCosts,
-  navigateToTab
+  navigateToTab,
+  currencySymbol = '₹'
 }: SummaryTabProps) {
 
   // Helper function to calculate item-level additional costs
@@ -127,7 +129,7 @@ export default function SummaryTab({
           <div className="grid grid-cols-4 gap-6">
             <div>
               <div className="text-sm text-gray-600 mb-1">Total Quote Value</div>
-              <div className="text-3xl font-bold text-gray-900">${totalQuoteValue.toLocaleString()}</div>
+              <div className="text-3xl font-bold text-gray-900">{currencySymbol}{totalQuoteValue.toLocaleString()}</div>
             </div>
             <div>
               <div className="text-sm text-gray-600 mb-1">Total Items</div>
@@ -184,9 +186,9 @@ export default function SummaryTab({
                     <td className="px-3 py-2.5 text-gray-700 max-w-xs truncate" title={item.itemName}>{item.itemName}</td>
                     <td className="px-3 py-2.5 text-gray-700">{item.vendor}</td>
                     <td className="px-3 py-2.5 text-gray-700">{item.category}</td>
-                    <td className="px-3 py-2.5 text-right text-gray-700">${item.cost.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right text-purple-700">${item.additionalCost.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">${(item.cost + item.additionalCost).toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{currencySymbol}{item.cost.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right text-purple-700">{currencySymbol}{item.additionalCost.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">{currencySymbol}{(item.cost + item.additionalCost).toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{item.percent.toFixed(2)}%</td>
                   </tr>
                 ))}
@@ -195,13 +197,13 @@ export default function SummaryTab({
                 <tr className="bg-gray-50 font-bold">
                   <td colSpan={5} className="px-3 py-2.5 text-gray-900">Top 10 Subtotal:</td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${top10Items.reduce((sum, item) => sum + item.cost, 0).toLocaleString()}
+                    {currencySymbol}{top10Items.reduce((sum, item) => sum + item.cost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-purple-700">
-                    ${top10Items.reduce((sum, item) => sum + item.additionalCost, 0).toLocaleString()}
+                    {currencySymbol}{top10Items.reduce((sum, item) => sum + item.additionalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${top10Items.reduce((sum, item) => sum + item.cost + item.additionalCost, 0).toLocaleString()}
+                    {currencySymbol}{top10Items.reduce((sum, item) => sum + item.cost + item.additionalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
                     {top10Items.reduce((sum, item) => sum + item.percent, 0).toFixed(2)}%
@@ -246,7 +248,7 @@ export default function SummaryTab({
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="font-bold text-gray-900">${vendor.value.toLocaleString()}</div>
+                    <div className="font-bold text-gray-900">{currencySymbol}{vendor.value.toLocaleString()}</div>
                     <div className="text-xs text-gray-600">{vendor.percent.toFixed(1)}%</div>
                   </div>
                 </div>
@@ -268,7 +270,7 @@ export default function SummaryTab({
                 </Pie>
                 <Tooltip
                   formatter={(value: number, _name: string, props: any) => [
-                    `$${value.toLocaleString()}`,
+                    `${currencySymbol}${value.toLocaleString()}`,
                     props.payload.name
                   ]}
                   contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
@@ -309,7 +311,7 @@ export default function SummaryTab({
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className="font-bold text-gray-900">${category.value.toLocaleString()}</div>
+                    <div className="font-bold text-gray-900">{currencySymbol}{category.value.toLocaleString()}</div>
                     <div className="text-xs text-gray-600">{category.percent.toFixed(1)}%</div>
                   </div>
                 </div>
@@ -331,7 +333,7 @@ export default function SummaryTab({
                 </Pie>
                 <Tooltip
                   formatter={(value: number, _name: string, props: any) => [
-                    `$${value.toLocaleString()}`,
+                    `${currencySymbol}${value.toLocaleString()}`,
                     props.payload.name
                   ]}
                   contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
@@ -435,9 +437,9 @@ export default function SummaryTab({
                     <td className="px-3 py-2.5 font-mono text-gray-900 font-medium">{bom.code}</td>
                     <td className="px-3 py-2.5 text-gray-700">{bom.name}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{bom.quantity || '-'}</td>
-                    <td className="px-3 py-2.5 text-right text-gray-700">${bom.itemsSubtotal.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right text-gray-700">${bom.bomAdditionalCost.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">${bom.total.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{currencySymbol}{bom.itemsSubtotal.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right text-gray-700">{currencySymbol}{bom.bomAdditionalCost.toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">{currencySymbol}{bom.total.toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{bom.percent.toFixed(2)}%</td>
                   </tr>
                 ))}
@@ -446,13 +448,13 @@ export default function SummaryTab({
                 <tr className="bg-gray-50 font-bold">
                   <td colSpan={3} className="px-3 py-2.5 text-gray-900">Total:</td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${bomBreakdown.reduce((sum, bom) => sum + bom.itemsSubtotal, 0).toLocaleString()}
+                    {currencySymbol}{bomBreakdown.reduce((sum, bom) => sum + bom.itemsSubtotal, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${bomBreakdown.reduce((sum, bom) => sum + bom.bomAdditionalCost, 0).toLocaleString()}
+                    {currencySymbol}{bomBreakdown.reduce((sum, bom) => sum + bom.bomAdditionalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    ${bomBreakdown.reduce((sum, bom) => sum + bom.total, 0).toLocaleString()}
+                    {currencySymbol}{bomBreakdown.reduce((sum, bom) => sum + bom.total, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
                     {bomBreakdown.reduce((sum, bom) => sum + bom.percent, 0).toFixed(2)}%
@@ -471,7 +473,7 @@ export default function SummaryTab({
             <h3 className="text-lg font-bold text-gray-900">Additional Costs Breakdown</h3>
             <div className="text-right">
               <div className="text-sm text-gray-600">Total Additional Costs</div>
-              <div className="text-2xl font-bold text-gray-900">${additionalCosts.totalAdditionalCosts.toLocaleString()}</div>
+              <div className="text-2xl font-bold text-gray-900">{currencySymbol}{additionalCosts.totalAdditionalCosts.toLocaleString()}</div>
               <div className="text-xs text-gray-600">{additionalCosts.percentOfBaseQuote.toFixed(2)}% of quote</div>
             </div>
           </div>
@@ -485,7 +487,7 @@ export default function SummaryTab({
                   <p className="text-xs text-gray-600">Costs added at individual item level</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">${additionalCosts.itemLevel.total.toLocaleString()}</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.itemLevel.total.toLocaleString()}</div>
                   <div className="text-xs text-gray-600">{additionalCosts.itemLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
                     onClick={() => navigateToTab('items', {})}
@@ -499,7 +501,7 @@ export default function SummaryTab({
                 {additionalCosts.itemLevel.breakdown.map((ac) => (
                   <div key={ac.costName} className="bg-gray-50 p-3 rounded">
                     <div className="text-xs text-gray-600">{ac.costName}</div>
-                    <div className="text-lg font-bold text-gray-900">${ac.total.toLocaleString()}</div>
+                    <div className="text-lg font-bold text-gray-900">{currencySymbol}{ac.total.toLocaleString()}</div>
                     <div className="text-xs text-gray-600">{ac.count} items</div>
                   </div>
                 ))}
@@ -514,7 +516,7 @@ export default function SummaryTab({
                   <p className="text-xs text-gray-600">Costs added at BOM level (showing all volume options)</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">${additionalCosts.bomLevel.total.toLocaleString()}</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.bomLevel.total.toLocaleString()}</div>
                   <div className="text-xs text-gray-600">{additionalCosts.bomLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
                     onClick={() => navigateToTab('bom', {})}
@@ -539,7 +541,7 @@ export default function SummaryTab({
                       <div className="text-xs text-gray-600">{bom.name}</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-bold text-gray-900">${bom.bomAdditionalCost.toLocaleString()}</div>
+                      <div className="font-bold text-gray-900">{currencySymbol}{bom.bomAdditionalCost.toLocaleString()}</div>
                       <div className="text-xs text-gray-600">{((bom.bomAdditionalCost / bom.total) * 100).toFixed(2)}% of BOM total</div>
                     </div>
                   </div>
@@ -555,7 +557,7 @@ export default function SummaryTab({
                   <p className="text-xs text-gray-600">Costs added at quote level</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">${additionalCosts.overallLevel.total.toLocaleString()}</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.overallLevel.total.toLocaleString()}</div>
                   <div className="text-xs text-gray-600">{additionalCosts.overallLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
                     onClick={() => navigateToTab('overall', {})}
@@ -572,11 +574,11 @@ export default function SummaryTab({
                     <div className="flex justify-between items-end mt-1">
                       <div>
                         <div className="text-xs text-gray-500">Original:</div>
-                        <div className="font-bold text-gray-700">${ac.original.toLocaleString()}</div>
+                        <div className="font-bold text-gray-700">{currencySymbol}{ac.original.toLocaleString()}</div>
                       </div>
                       <div className="text-right">
                         <div className="text-xs text-gray-500">Agreed:</div>
-                        <div className="font-bold text-gray-900">${ac.agreed.toLocaleString()}</div>
+                        <div className="font-bold text-gray-900">{currencySymbol}{ac.agreed.toLocaleString()}</div>
                       </div>
                     </div>
                   </div>
