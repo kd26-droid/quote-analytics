@@ -1,5 +1,5 @@
-// API Base URL
-const API_BASE_URL = 'http://localhost:8000';
+// API Base URL - uses env variable in production, localhost for local dev
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // Header API Types
 export interface QuoteAnalyticsHeaderData {
