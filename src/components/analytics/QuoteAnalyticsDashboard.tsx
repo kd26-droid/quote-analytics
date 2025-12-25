@@ -16,6 +16,7 @@ export interface NavigationContext {
   selectedCategory?: string;
   selectedAdditionalCost?: string;
   selectedSource?: string;
+  targetView?: string; // For navigating to a specific view within a tab
 }
 
 interface QuoteAnalyticsDashboardProps {
@@ -97,12 +98,12 @@ export default function QuoteAnalyticsDashboard({
         {activeTab === 'summary' && (
           <SummaryTab
             data={data}
+            costViewData={costViewData}
+            bomDetailData={bomDetailData}
             totalQuoteValue={totalQuoteValue}
             totalItems={totalItems}
             topCategories={topCategories}
             topVendors={topVendors}
-            bomCostComparison={bomCostComparison}
-            additionalCosts={additionalCosts}
             navigateToTab={navigateToTab}
             currencySymbol={currencySymbol}
           />

@@ -1,17 +1,17 @@
 import { useMemo } from 'react';
 import { Card, CardContent } from '../../ui/card';
-import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import type { TopItemsAnalytics, Category, Vendor, BOMCostComparison, AdditionalCostsBreakdown } from '../../../types/quote.types';
+import type { TopItemsAnalytics, Category, Vendor } from '../../../types/quote.types';
 import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
+import type { CostViewData, BOMDetailData } from '../../../services/api';
 
 interface SummaryTabProps {
   data: TopItemsAnalytics;
+  costViewData?: CostViewData;
+  bomDetailData?: BOMDetailData | null;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
   topVendors: Vendor[];
-  bomCostComparison: BOMCostComparison[];
-  additionalCosts: AdditionalCostsBreakdown;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
   currencySymbol?: string;
 }
@@ -20,105 +20,228 @@ const COLORS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#059669', '#0891b2'
 
 export default function SummaryTab({
   data,
+  costViewData,
+  bomDetailData,
   totalQuoteValue,
   totalItems,
   topCategories,
   topVendors,
-  bomCostComparison,
-  additionalCosts,
   navigateToTab,
   currencySymbol = '₹'
 }: SummaryTabProps) {
 
-  // Helper function to calculate item-level additional costs
-  const getItemAdditionalCosts = (itemCode: string, itemCost: number) => {
-    const random = itemCode.charCodeAt(0) % 5;
-    let totalAdditionalCost = 0;
-
-    if (random >= 1) totalAdditionalCost += Math.floor(itemCost * 0.02); // MOQ
-    if (random >= 2) totalAdditionalCost += Math.floor(itemCost * 0.03); // Markup
-    if (random >= 3) totalAdditionalCost += Math.floor(itemCost * 0.015); // Tax
-    if (random === 4) totalAdditionalCost += Math.floor(itemCost * 0.01); // Shipping
-
-    return totalAdditionalCost;
-  };
-
-  // Top 10 items
+  // Top 10 items from real API data (costViewData)
+  // % of Quote calculated same as CostView: total_amount / totalQuoteValue
   const top10Items = useMemo(() => {
+    if (costViewData?.items) {
+      // Sort by total_amount descending and take top 10
+      return [...costViewData.items]
+        .sort((a, b) => b.total_amount - a.total_amount)
+        .slice(0, 10)
+        .map(item => ({
+          itemCode: item.item_code,
+          itemName: item.item_name,
+          cost: item.total_item_cost - item.total_additional_cost, // Base cost without AC
+          additionalCost: item.total_additional_cost,
+          totalCost: item.total_amount, // Use total_amount same as CostView
+          percent: totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue) * 100 : 0, // Same formula as CostView
+          vendor: item.vendor_name || 'Unknown',
+          category: item.tags?.[0] || 'Uncategorized'
+        }));
+    }
+    // Fallback to old data if costViewData not available
     return data.overall.slice(0, 10).map(item => ({
       itemCode: item.itemCode,
       itemName: item.itemName,
       cost: item.totalCost,
-      additionalCost: getItemAdditionalCosts(item.itemCode, item.totalCost),
-      percent: item.percentOfQuote,
+      additionalCost: 0,
+      totalCost: item.totalCost,
+      percent: totalQuoteValue > 0 ? (item.totalCost / totalQuoteValue) * 100 : 0,
       vendor: item.vendor,
       category: item.category || 'Uncategorized'
     }));
-  }, [data.overall]);
+  }, [costViewData, data.overall, totalQuoteValue]);
 
-  // Vendor breakdown (all vendors)
+  // Vendor breakdown from costViewData (same logic as VendorView)
   const vendorBreakdown = useMemo(() => {
+    if (costViewData?.items) {
+      const vendorMap = new Map<string, { vendor_id: string; vendor_name: string; items: number; totalCost: number }>();
+
+      costViewData.items.forEach(item => {
+        if (!item.vendor_id || !item.vendor_name) return;
+        const current = vendorMap.get(item.vendor_id) || {
+          vendor_id: item.vendor_id,
+          vendor_name: item.vendor_name,
+          items: 0,
+          totalCost: 0
+        };
+        current.items += 1;
+        current.totalCost += item.total_amount;
+        vendorMap.set(item.vendor_id, current);
+      });
+
+      const totalCostSum = Array.from(vendorMap.values()).reduce((sum, v) => sum + v.totalCost, 0);
+
+      return Array.from(vendorMap.values())
+        .map(stats => ({
+          name: stats.vendor_name,
+          value: stats.totalCost,
+          percent: totalCostSum > 0 ? (stats.totalCost / totalCostSum) * 100 : 0,
+          items: stats.items
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5);
+    }
+    // Fallback
     return topVendors.slice(0, 5).map(v => ({
       name: v.vendorName,
       value: v.totalValue,
       percent: v.percentOfQuote,
       items: v.itemCount
     }));
-  }, [topVendors]);
+  }, [costViewData, topVendors]);
 
-  // Category breakdown (all categories)
+  // Category breakdown from costViewData (same logic as CategoryView)
   const categoryBreakdown = useMemo(() => {
+    if (costViewData?.items) {
+      const catMap = new Map<string, { items: number; totalCost: number }>();
+
+      costViewData.items.forEach(item => {
+        const tags = item.tags.length > 0 ? item.tags : ['Uncategorized'];
+        tags.forEach(tag => {
+          const current = catMap.get(tag) || { items: 0, totalCost: 0 };
+          current.items += 1;
+          current.totalCost += item.total_amount;
+          catMap.set(tag, current);
+        });
+      });
+
+      const totalCostSum = Array.from(catMap.values()).reduce((sum, c) => sum + c.totalCost, 0);
+
+      return Array.from(catMap.entries())
+        .map(([category, stats]) => ({
+          name: category,
+          value: stats.totalCost,
+          percent: totalCostSum > 0 ? (stats.totalCost / totalCostSum) * 100 : 0,
+          items: stats.items
+        }))
+        .sort((a, b) => b.value - a.value)
+        .slice(0, 5);
+    }
+    // Fallback
     return topCategories.slice(0, 5).map(c => ({
       name: c.category,
       value: c.totalCost,
       percent: c.percentOfQuote,
       items: c.itemCount
     }));
-  }, [topCategories]);
+  }, [costViewData, topCategories]);
 
-  // BOM breakdown
+  // BOM breakdown from bomDetailData (same logic as BOMComparisonView)
+  // Shows main BOMs (level 0) from each instance
   const bomBreakdown = useMemo(() => {
-    return bomCostComparison.map(bom => ({
-      code: bom.bomCode,
-      name: bom.bomName,
-      quantity: bom.bomQuantity,
-      itemsSubtotal: bom.itemsSubtotal,
-      bomAdditionalCost: bom.bomAdditionalCosts,
-      total: bom.bomTotalWithAC,
-      percent: bom.percentOfQuote
-    }));
-  }, [bomCostComparison]);
+    if (bomDetailData?.bom_instances) {
+      return bomDetailData.bom_instances.map((instance, idx) => {
+        // Get the main BOM (level 0) from hierarchy
+        const mainBOM = instance.hierarchy.find(h => h.bom_level === 0);
+        if (!mainBOM) return null;
 
-  // Check if there are volume scenarios (duplicate BOMs with different quantities)
+        const instanceLabel = bomDetailData.bom_instances.length > 1 ? ` (#${instance.instance_index})` : '';
+
+        return {
+          code: mainBOM.bom_code + instanceLabel,
+          name: mainBOM.bom_name,
+          quantity: mainBOM.bom_quantity,
+          itemsSubtotal: mainBOM.total_item_cost,
+          bomAdditionalCost: mainBOM.total_bom_ac_quoted,
+          total: mainBOM.total_quoted_amount,
+          percent: totalQuoteValue > 0 ? (mainBOM.total_quoted_amount / totalQuoteValue) * 100 : 0
+        };
+      }).filter(Boolean) as Array<{
+        code: string;
+        name: string;
+        quantity: number;
+        itemsSubtotal: number;
+        bomAdditionalCost: number;
+        total: number;
+        percent: number;
+      }>;
+    }
+    return [];
+  }, [bomDetailData, totalQuoteValue]);
+
+  // Check if there are volume scenarios (multiple BOM instances)
   const hasVolumeScenarios = useMemo(() => {
-    const bomCodeCounts = new Map<string, number>();
-    bomCostComparison.forEach(bom => {
-      const count = bomCodeCounts.get(bom.bomCode) || 0;
-      bomCodeCounts.set(bom.bomCode, count + 1);
-    });
-    return Array.from(bomCodeCounts.values()).some(count => count > 1);
-  }, [bomCostComparison]);
+    return (bomDetailData?.bom_instances?.length || 0) > 1;
+  }, [bomDetailData]);
 
-  // Item Source data (mock - based on item code)
-  const itemSourceSummary = useMemo(() => {
-    const sources = {
-      event: 0,
-      project: 0,
-      quote: 0,
-      removed: 0
+  // Additional Costs breakdown from real API data
+  const additionalCostsData = useMemo(() => {
+    // Item Level AC - from costViewData.items
+    const itemLevelBreakdown = new Map<string, { total: number; count: number }>();
+    let itemLevelTotal = 0;
+
+    if (costViewData?.items) {
+      costViewData.items.forEach(item => {
+        if (item.total_additional_cost > 0) {
+          itemLevelTotal += item.total_additional_cost;
+          item.additional_costs.forEach(ac => {
+            const existing = itemLevelBreakdown.get(ac.cost_name) || { total: 0, count: 0 };
+            existing.total += ac.total_amount;
+            existing.count += 1;
+            itemLevelBreakdown.set(ac.cost_name, existing);
+          });
+        }
+      });
+    }
+
+    const itemLevel = {
+      total: itemLevelTotal,
+      percentOfQuote: totalQuoteValue > 0 ? (itemLevelTotal / totalQuoteValue) * 100 : 0,
+      breakdown: Array.from(itemLevelBreakdown.entries())
+        .map(([costName, data]) => ({ costName, total: data.total, count: data.count }))
+        .sort((a, b) => b.total - a.total)
     };
 
-    data.overall.forEach(item => {
-      const random = item.itemCode.charCodeAt(0) % 10;
-      if (random >= 7) sources.event++;
-      else if (random >= 4) sources.project++;
-      else sources.quote++;
+    // BOM Level AC - sum from bomBreakdown
+    const bomLevelTotal = bomBreakdown.reduce((sum, bom) => sum + bom.bomAdditionalCost, 0);
+    const bomLevel = {
+      total: bomLevelTotal,
+      percentOfQuote: totalQuoteValue > 0 ? (bomLevelTotal / totalQuoteValue) * 100 : 0
+    };
 
-      if (random === 0 || random === 1) sources.removed++;
-    });
+    // Overall Level AC - from costViewData.overall_additional_costs
+    const overallBreakdown: Array<{ costName: string; original: number; agreed: number }> = [];
+    let overallLevelTotal = 0;
 
-    return sources;
-  }, [data.overall]);
+    if (costViewData?.overall_additional_costs) {
+      costViewData.overall_additional_costs.forEach(ac => {
+        overallBreakdown.push({
+          costName: ac.cost_name,
+          original: ac.calculated_amount,
+          agreed: ac.quoted_amount
+        });
+        overallLevelTotal += ac.quoted_amount;
+      });
+    }
+
+    const overallLevel = {
+      total: overallLevelTotal,
+      percentOfQuote: totalQuoteValue > 0 ? (overallLevelTotal / totalQuoteValue) * 100 : 0,
+      breakdown: overallBreakdown
+    };
+
+    // Total
+    const totalAdditionalCosts = itemLevelTotal + bomLevelTotal + overallLevelTotal;
+
+    return {
+      totalAdditionalCosts,
+      percentOfBaseQuote: totalQuoteValue > 0 ? (totalAdditionalCosts / totalQuoteValue) * 100 : 0,
+      itemLevel,
+      bomLevel,
+      overallLevel
+    };
+  }, [costViewData, bomBreakdown, totalQuoteValue]);
 
   return (
     <div className="space-y-6">
@@ -153,10 +276,10 @@ export default function SummaryTab({
           <div className="flex justify-between items-center mb-4">
             <h3 className="text-lg font-bold text-gray-900">Top 10 Most Expensive Items</h3>
             <button
-              onClick={() => navigateToTab('items', {})}
+              onClick={() => navigateToTab('items', { targetView: 'cost' })}
               className="text-sm text-blue-600 hover:text-blue-800 font-medium"
             >
-              View All Items →
+              View All Items in Cost View →
             </button>
           </div>
           <div className="overflow-x-auto">
@@ -188,7 +311,7 @@ export default function SummaryTab({
                     <td className="px-3 py-2.5 text-gray-700">{item.category}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{currencySymbol}{item.cost.toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right text-purple-700">{currencySymbol}{item.additionalCost.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">{currencySymbol}{(item.cost + item.additionalCost).toLocaleString()}</td>
+                    <td className="px-3 py-2.5 text-right font-bold text-gray-900">{currencySymbol}{item.totalCost.toLocaleString()}</td>
                     <td className="px-3 py-2.5 text-right text-gray-700">{item.percent.toFixed(2)}%</td>
                   </tr>
                 ))}
@@ -203,7 +326,7 @@ export default function SummaryTab({
                     {currencySymbol}{top10Items.reduce((sum, item) => sum + item.additionalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
-                    {currencySymbol}{top10Items.reduce((sum, item) => sum + item.cost + item.additionalCost, 0).toLocaleString()}
+                    {currencySymbol}{top10Items.reduce((sum, item) => sum + item.totalCost, 0).toLocaleString()}
                   </td>
                   <td className="px-3 py-2.5 text-right text-gray-900">
                     {top10Items.reduce((sum, item) => sum + item.percent, 0).toFixed(2)}%
@@ -223,19 +346,19 @@ export default function SummaryTab({
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold text-gray-900">Vendor Breakdown</h3>
               <button
-                onClick={() => navigateToTab('items', {})}
+                onClick={() => navigateToTab('items', { targetView: 'vendor' })}
                 className="text-sm text-blue-600 hover:text-blue-800 font-medium"
               >
-                View Details →
+                View Vendor Analysis →
               </button>
             </div>
 
-            <div className="space-y-3 mb-4">
+            <div className="space-y-3">
               {vendorBreakdown.map((vendor, idx) => (
                 <div
                   key={vendor.name}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded hover:bg-blue-50 cursor-pointer transition-colors"
-                  onClick={() => navigateToTab('items', { selectedVendor: vendor.name })}
+                  onClick={() => navigateToTab('items', { targetView: 'vendor', selectedVendor: vendor.name })}
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -254,29 +377,6 @@ export default function SummaryTab({
                 </div>
               ))}
             </div>
-
-            <ResponsiveContainer width="100%" height={150}>
-              <PieChart>
-                <Pie
-                  data={vendorBreakdown}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={50}
-                  dataKey="value"
-                >
-                  {vendorBreakdown.map((_entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(value: number, _name: string, props: any) => [
-                    `${currencySymbol}${value.toLocaleString()}`,
-                    props.payload.name
-                  ]}
-                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
           </CardContent>
         </Card>
 
@@ -286,19 +386,19 @@ export default function SummaryTab({
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold text-gray-900">Category Breakdown</h3>
               <button
-                onClick={() => navigateToTab('items', {})}
+                onClick={() => navigateToTab('items', { targetView: 'category' })}
                 className="text-sm text-blue-600 hover:text-blue-800 font-medium"
               >
-                View Details →
+                View Category Analysis →
               </button>
             </div>
 
-            <div className="space-y-3 mb-4">
+            <div className="space-y-3">
               {categoryBreakdown.map((category, idx) => (
                 <div
                   key={category.name}
                   className="flex items-center justify-between p-3 bg-gray-50 rounded hover:bg-blue-50 cursor-pointer transition-colors"
-                  onClick={() => navigateToTab('items', { selectedCategory: category.name })}
+                  onClick={() => navigateToTab('items', { targetView: 'category', selectedCategory: category.name })}
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -317,79 +417,9 @@ export default function SummaryTab({
                 </div>
               ))}
             </div>
-
-            <ResponsiveContainer width="100%" height={150}>
-              <PieChart>
-                <Pie
-                  data={categoryBreakdown}
-                  cx="50%"
-                  cy="50%"
-                  outerRadius={50}
-                  dataKey="value"
-                >
-                  {categoryBreakdown.map((_entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  formatter={(value: number, _name: string, props: any) => [
-                    `${currencySymbol}${value.toLocaleString()}`,
-                    props.payload.name
-                  ]}
-                  contentStyle={{ fontSize: 11, backgroundColor: '#fff', border: '1px solid #ccc', borderRadius: '4px', padding: '8px' }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
           </CardContent>
         </Card>
       </div>
-
-      {/* Section 3.5: Item Source Summary */}
-      <Card className="border-gray-300">
-        <CardContent className="p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-bold text-gray-900">Item Source Tracking</h3>
-            <button
-              onClick={() => navigateToTab('items', {})}
-              className="text-sm text-blue-600 hover:text-blue-800 font-medium"
-            >
-              View Item Source Details →
-            </button>
-          </div>
-
-          <div className="grid grid-cols-4 gap-4">
-            <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
-              <div className="text-xs text-purple-700 mb-1 font-semibold">From Event</div>
-              <div className="text-3xl font-bold text-purple-900">{itemSourceSummary.event}</div>
-              <div className="text-xs text-purple-600 mt-1">items originated from events</div>
-            </div>
-
-            <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-              <div className="text-xs text-blue-700 mb-1 font-semibold">From Project</div>
-              <div className="text-3xl font-bold text-blue-900">{itemSourceSummary.project}</div>
-              <div className="text-xs text-blue-600 mt-1">items originated from projects</div>
-            </div>
-
-            <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-              <div className="text-xs text-green-700 mb-1 font-semibold">From Quote</div>
-              <div className="text-3xl font-bold text-green-900">{itemSourceSummary.quote}</div>
-              <div className="text-xs text-green-600 mt-1">items originated from quotes</div>
-            </div>
-
-            <div className="bg-red-50 p-4 rounded-lg border border-red-200">
-              <div className="text-xs text-red-700 mb-1 font-semibold">Removed Items</div>
-              <div className="text-3xl font-bold text-red-900">{itemSourceSummary.removed}</div>
-              <div className="text-xs text-red-600 mt-1">items removed from quote</div>
-            </div>
-          </div>
-
-          <div className="mt-4 text-xs text-gray-600 bg-gray-50 p-3 rounded">
-            💡 <span className="font-semibold">Item Source Tracking</span> shows the origin of items in your quote.
-            Items can come from Events, Projects, or be directly added to Quotes.
-            Track which items were removed and understand your quote composition.
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Section 4: BOM Breakdown - Detailed Table */}
       <Card className="border-gray-300">
@@ -473,8 +503,8 @@ export default function SummaryTab({
             <h3 className="text-lg font-bold text-gray-900">Additional Costs Breakdown</h3>
             <div className="text-right">
               <div className="text-sm text-gray-600">Total Additional Costs</div>
-              <div className="text-2xl font-bold text-gray-900">{currencySymbol}{additionalCosts.totalAdditionalCosts.toLocaleString()}</div>
-              <div className="text-xs text-gray-600">{additionalCosts.percentOfBaseQuote.toFixed(2)}% of quote</div>
+              <div className="text-2xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.totalAdditionalCosts.toLocaleString()}</div>
+              <div className="text-xs text-gray-600">{additionalCostsData.percentOfBaseQuote.toFixed(2)}% of quote</div>
             </div>
           </div>
 
@@ -487,25 +517,27 @@ export default function SummaryTab({
                   <p className="text-xs text-gray-600">Costs added at individual item level</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.itemLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCosts.itemLevel.percentOfQuote.toFixed(2)}% of quote</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.itemLevel.total.toLocaleString()}</div>
+                  <div className="text-xs text-gray-600">{additionalCostsData.itemLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
-                    onClick={() => navigateToTab('items', {})}
+                    onClick={() => navigateToTab('items', { targetView: 'additional-costs' })}
                     className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
                   >
-                    View in Items Tab →
+                    View Additional Costs →
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-3">
-                {additionalCosts.itemLevel.breakdown.map((ac) => (
-                  <div key={ac.costName} className="bg-gray-50 p-3 rounded">
-                    <div className="text-xs text-gray-600">{ac.costName}</div>
-                    <div className="text-lg font-bold text-gray-900">{currencySymbol}{ac.total.toLocaleString()}</div>
-                    <div className="text-xs text-gray-600">{ac.count} items</div>
-                  </div>
-                ))}
-              </div>
+              {additionalCostsData.itemLevel.breakdown.length > 0 && (
+                <div className="grid grid-cols-3 gap-3">
+                  {additionalCostsData.itemLevel.breakdown.map((ac) => (
+                    <div key={ac.costName} className="bg-gray-50 p-3 rounded">
+                      <div className="text-xs text-gray-600">{ac.costName}</div>
+                      <div className="text-lg font-bold text-gray-900">{currencySymbol}{ac.total.toLocaleString()}</div>
+                      <div className="text-xs text-gray-600">{ac.count} items</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* BOM Level Additional Costs */}
@@ -513,40 +545,42 @@ export default function SummaryTab({
               <div className="flex justify-between items-start mb-3">
                 <div>
                   <h4 className="font-bold text-gray-900">BOM Level Additional Costs</h4>
-                  <p className="text-xs text-gray-600">Costs added at BOM level (showing all volume options)</p>
+                  <p className="text-xs text-gray-600">Costs added at BOM level</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.bomLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCosts.bomLevel.percentOfQuote.toFixed(2)}% of quote</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.bomLevel.total.toLocaleString()}</div>
+                  <div className="text-xs text-gray-600">{additionalCostsData.bomLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
-                    onClick={() => navigateToTab('bom', {})}
+                    onClick={() => navigateToTab('bom', { targetView: 'comparison' })}
                     className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
                   >
-                    View in BOM Tab →
+                    View BOM Analysis →
                   </button>
                 </div>
               </div>
-              <div className="space-y-2">
-                {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).map((bom, idx) => (
-                  <div
-                    key={`bom-additional-cost-${bom.code}-${bom.quantity || 'default'}-${idx}`}
-                    className="bg-gray-50 p-3 rounded flex justify-between items-center hover:bg-blue-50 cursor-pointer"
-                    onClick={() => navigateToTab('bom', { selectedBOM: bom.code })}
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900">
-                        BOM {bom.code}
-                        {bom.quantity && <span className="ml-2 text-xs text-purple-700 bg-purple-100 px-2 py-0.5 rounded">Qty: {bom.quantity}</span>}
+              {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).length > 0 && (
+                <div className="space-y-2">
+                  {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).map((bom, idx) => (
+                    <div
+                      key={`bom-additional-cost-${bom.code}-${bom.quantity || 'default'}-${idx}`}
+                      className="bg-gray-50 p-3 rounded flex justify-between items-center hover:bg-blue-50 cursor-pointer"
+                      onClick={() => navigateToTab('bom', { selectedBOM: bom.code })}
+                    >
+                      <div>
+                        <div className="font-medium text-gray-900">
+                          BOM {bom.code}
+                          {bom.quantity && <span className="ml-2 text-xs text-purple-700 bg-purple-100 px-2 py-0.5 rounded">Qty: {bom.quantity}</span>}
+                        </div>
+                        <div className="text-xs text-gray-600">{bom.name}</div>
                       </div>
-                      <div className="text-xs text-gray-600">{bom.name}</div>
+                      <div className="text-right">
+                        <div className="font-bold text-gray-900">{currencySymbol}{bom.bomAdditionalCost.toLocaleString()}</div>
+                        <div className="text-xs text-gray-600">{bom.total > 0 ? ((bom.bomAdditionalCost / bom.total) * 100).toFixed(2) : 0}% of BOM total</div>
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="font-bold text-gray-900">{currencySymbol}{bom.bomAdditionalCost.toLocaleString()}</div>
-                      <div className="text-xs text-gray-600">{((bom.bomAdditionalCost / bom.total) * 100).toFixed(2)}% of BOM total</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Overall Level Additional Costs */}
@@ -557,33 +591,35 @@ export default function SummaryTab({
                   <p className="text-xs text-gray-600">Costs added at quote level</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCosts.overallLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCosts.overallLevel.percentOfQuote.toFixed(2)}% of quote</div>
+                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.overallLevel.total.toLocaleString()}</div>
+                  <div className="text-xs text-gray-600">{additionalCostsData.overallLevel.percentOfQuote.toFixed(2)}% of quote</div>
                   <button
                     onClick={() => navigateToTab('overall', {})}
                     className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
                   >
-                    View in Overall Tab →
+                    View Overall Tab →
                   </button>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                {additionalCosts.overallLevel.breakdown.map((ac) => (
-                  <div key={ac.costName} className="bg-gray-50 p-3 rounded">
-                    <div className="text-xs text-gray-600">{ac.costName}</div>
-                    <div className="flex justify-between items-end mt-1">
-                      <div>
-                        <div className="text-xs text-gray-500">Original:</div>
-                        <div className="font-bold text-gray-700">{currencySymbol}{ac.original.toLocaleString()}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xs text-gray-500">Agreed:</div>
-                        <div className="font-bold text-gray-900">{currencySymbol}{ac.agreed.toLocaleString()}</div>
+              {additionalCostsData.overallLevel.breakdown.length > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {additionalCostsData.overallLevel.breakdown.map((ac) => (
+                    <div key={ac.costName} className="bg-gray-50 p-3 rounded">
+                      <div className="text-xs text-gray-600">{ac.costName}</div>
+                      <div className="flex justify-between items-end mt-1">
+                        <div>
+                          <div className="text-xs text-gray-500">Original:</div>
+                          <div className="font-bold text-gray-700">{currencySymbol}{ac.original.toLocaleString()}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xs text-gray-500">Agreed:</div>
+                          <div className="font-bold text-gray-900">{currencySymbol}{ac.agreed.toLocaleString()}</div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </CardContent>

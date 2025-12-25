@@ -28,22 +28,6 @@ interface ItemVolumeAnalysisViewProps {
 // Color palette for charts
 const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
 
-// Available views for volume analysis
-type VolumeViewType =
-  | 'quoted_rate'
-  | 'vendor_rate'
-  | 'base_rate'
-  | 'total_ac'
-  | 'total_cost';
-
-const VIEW_OPTIONS: { value: VolumeViewType; label: string; description: string }[] = [
-  { value: 'quoted_rate', label: 'Quoted Rate', description: 'Final per-unit rate after all costs' },
-  { value: 'vendor_rate', label: 'Vendor Rate', description: 'Original rate from vendor' },
-  { value: 'base_rate', label: 'Base Rate', description: 'Rate converted to quote currency' },
-  { value: 'total_ac', label: 'Additional Costs', description: 'Total AC per unit' },
-  { value: 'total_cost', label: 'Total Cost', description: 'Total line cost (qty × rate)' },
-];
-
 // Display mode for the view
 type DisplayMode = 'table' | 'chart';
 
@@ -56,10 +40,32 @@ export default function ItemVolumeAnalysisView({
   filterResetKey,
   onClearAllFilters
 }: ItemVolumeAnalysisViewProps) {
-  // View selection
-  const [selectedView, setSelectedView] = useState<VolumeViewType>('quoted_rate');
   const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
-  const [selectedChartItem, setSelectedChartItem] = useState<string | null>(null);
+
+  // Column visibility - like CostView's "Views" dropdown
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
+    'item_code', 'item_name'
+  ]));
+
+  // Column definitions (optional columns that can be shown/hidden)
+  const columnDefs = [
+    { key: 'item_code', label: 'Item Code', align: 'left' as const },
+    { key: 'item_name', label: 'Item Name', align: 'left' as const },
+    { key: 'vendor_name', label: 'Vendor', align: 'left' as const },
+    { key: 'bom_path', label: 'BOM Hierarchy', align: 'left' as const },
+  ];
+
+  const toggleColumn = (key: string) => {
+    setVisibleColumns(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        if (next.size > 1) next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
 
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -72,15 +78,14 @@ export default function ItemVolumeAnalysisView({
   const [tableSearch, setTableSearch] = useState('');
 
   // Sorting
-  const [sortColumn, setSortColumn] = useState<string>('change_percent');
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [sortColumn, setSortColumn] = useState<string>('item_code');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Dropdown state
-  const [openDropdown, setOpenDropdown] = useState<'vendor' | 'tags' | 'bom' | 'view' | null>(null);
+  const [openDropdown, setOpenDropdown] = useState<'vendor' | 'tags' | 'bom' | 'views' | null>(null);
   const [vendorSearch, setVendorSearch] = useState('');
   const [tagSearch, setTagSearch] = useState('');
   const [bomSearch, setBomSearch] = useState('');
-  const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
 
   // Get items from API - with null safety
   const items = costViewData?.items || [];
@@ -122,14 +127,12 @@ export default function ItemVolumeAnalysisView({
         bomPathSet.add(item.bom_path);
         const parts = item.bom_path.split(' > ');
         rootBOMs.add(parts[0]);
-        // Add parent paths for hierarchy
         for (let i = 1; i < parts.length; i++) {
           bomPathSet.add(parts.slice(0, i + 1).join(' > '));
         }
       }
     });
 
-    // Build hierarchy structure
     const hierarchy: { path: string; level: number; label: string }[] = [];
     const sortedPaths = Array.from(bomPathSet).sort();
 
@@ -159,16 +162,12 @@ export default function ItemVolumeAnalysisView({
   };
 
   // Group items by item_code + bom_path to find volume scenarios
-  // An item has volume scenarios if same item at same BOM path appears in multiple BOM instances
   const volumeAnalysisData = useMemo(() => {
     if (!hasVolumeScenarios) return [];
 
-    // Group items by item_code + bom_path (to compare same item at same hierarchy level)
     const itemGroups = new Map<string, CostViewItem[]>();
 
     items.forEach(item => {
-      // Use item_code + bom_path as the grouping key
-      // This ensures we compare the same item at the same BOM hierarchy position
       const key = `${item.item_code}||${item.bom_path || item.bom_code}`;
       if (!itemGroups.has(key)) {
         itemGroups.set(key, []);
@@ -176,7 +175,6 @@ export default function ItemVolumeAnalysisView({
       itemGroups.get(key)!.push(item);
     });
 
-    // Filter to only items that appear in multiple BOM instances
     const volumeItems: {
       item_code: string;
       item_name: string;
@@ -197,11 +195,9 @@ export default function ItemVolumeAnalysisView({
     }[] = [];
 
     itemGroups.forEach((groupItems, _key) => {
-      // Check if this item appears in multiple different BOM instances
       const uniqueInstances = new Set(groupItems.map(i => i.bom_instance_id));
 
       if (uniqueInstances.size > 1) {
-        // Sort by BOM instance quantity
         const sortedItems = [...groupItems].sort((a, b) => a.bom_instance_qty - b.bom_instance_qty);
 
         volumeItems.push({
@@ -239,7 +235,7 @@ export default function ItemVolumeAnalysisView({
             id: inst.bom_instance_id,
             qty: inst.bom_instance_qty,
             code: inst.bom_code,
-            label: `${inst.bom_code} @ ${inst.bom_instance_qty}`
+            label: `${inst.bom_code} @ ${inst.bom_instance_qty} units`
           });
         }
       });
@@ -252,21 +248,18 @@ export default function ItemVolumeAnalysisView({
   const filteredData = useMemo(() => {
     let result = [...volumeAnalysisData];
 
-    // Vendor filter
     if (!selectedVendors.includes('all')) {
       result = result.filter(item =>
         item.vendor_name && selectedVendors.includes(item.vendor_name)
       );
     }
 
-    // Tags filter
     if (!selectedTags.includes('all')) {
       result = result.filter(item =>
         item.tags.some(tag => selectedTags.includes(tag))
       );
     }
 
-    // BOM hierarchy filter
     if (!selectedBOMs.includes('all')) {
       result = result.filter(item =>
         selectedBOMs.some(bom =>
@@ -276,7 +269,6 @@ export default function ItemVolumeAnalysisView({
       );
     }
 
-    // Search filter
     if (tableSearch.trim()) {
       const search = tableSearch.toLowerCase();
       result = result.filter(item =>
@@ -290,26 +282,29 @@ export default function ItemVolumeAnalysisView({
     return result;
   }, [volumeAnalysisData, selectedVendors, selectedTags, selectedBOMs, tableSearch]);
 
-  // Get value for current view
+  // Get value - always show quoted_rate
   const getValue = (instance: typeof volumeAnalysisData[0]['instances'][0]) => {
-    switch (selectedView) {
-      case 'quoted_rate': return instance.quoted_rate;
-      case 'vendor_rate': return instance.vendor_rate;
-      case 'base_rate': return instance.base_rate;
-      case 'total_ac': return instance.total_ac;
-      case 'total_cost': return instance.total_cost;
-      default: return instance.quoted_rate;
-    }
+    return instance.quoted_rate;
   };
 
-  // Calculate change for sorting
-  const getChange = (item: typeof volumeAnalysisData[0]) => {
-    if (item.instances.length < 2) return 0;
-    const first = getValue(item.instances[0]);
-    const last = getValue(item.instances[item.instances.length - 1]);
-    if (first === 0) return 0;
-    return ((last - first) / first) * 100;
+  // Check if item has anomaly (price at higher quantity is same or more expensive)
+  const hasAnomaly = (item: typeof volumeAnalysisData[0]) => {
+    if (item.instances.length < 2) return false;
+    const lowestQtyValue = getValue(item.instances[0]);
+
+    for (let i = 1; i < item.instances.length; i++) {
+      const higherQtyValue = getValue(item.instances[i]);
+      if (higherQtyValue >= lowestQtyValue) {
+        return true;
+      }
+    }
+    return false;
   };
+
+  // Count anomalies
+  const anomalyCount = useMemo(() => {
+    return filteredData.filter(item => hasAnomaly(item)).length;
+  }, [filteredData]);
 
   // Sort data
   const sortedData = useMemo(() => {
@@ -319,10 +314,7 @@ export default function ItemVolumeAnalysisView({
       let aVal: number | string;
       let bVal: number | string;
 
-      if (sortColumn === 'change_percent') {
-        aVal = getChange(a);
-        bVal = getChange(b);
-      } else if (sortColumn === 'item_code') {
+      if (sortColumn === 'item_code') {
         aVal = a.item_code;
         bVal = b.item_code;
       } else if (sortColumn === 'item_name') {
@@ -335,7 +327,6 @@ export default function ItemVolumeAnalysisView({
         aVal = a.bom_path || '';
         bVal = b.bom_path || '';
       } else {
-        // Instance column - sort by value in that instance
         const instA = a.instances.find(i => i.bom_instance_id === sortColumn);
         const instB = b.instances.find(i => i.bom_instance_id === sortColumn);
         aVal = instA ? getValue(instA) : 0;
@@ -352,7 +343,7 @@ export default function ItemVolumeAnalysisView({
     });
 
     return sorted;
-  }, [filteredData, sortColumn, sortDirection, selectedView]);
+  }, [filteredData, sortColumn, sortDirection]);
 
   // Pagination
   const totalPages = Math.ceil(sortedData.length / pageSize);
@@ -364,7 +355,7 @@ export default function ItemVolumeAnalysisView({
   // Reset page on filter change
   React.useEffect(() => {
     setCurrentPage(1);
-  }, [selectedVendors, selectedTags, tableSearch, selectedView]);
+  }, [selectedVendors, selectedTags, tableSearch]);
 
   // Handle sort
   const handleSort = (column: string) => {
@@ -372,18 +363,18 @@ export default function ItemVolumeAnalysisView({
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
       setSortColumn(column);
-      setSortDirection('desc');
+      setSortDirection('asc');
     }
   };
 
   // Render sort indicator
   const renderSortIndicator = (column: string) => {
     if (sortColumn !== column) {
-      return <span className="text-gray-400 ml-1 text-[10px]">sort</span>;
+      return null;
     }
     return sortDirection === 'asc'
-      ? <span className="text-blue-600 ml-1 text-[10px] font-bold">ASC</span>
-      : <span className="text-blue-600 ml-1 text-[10px] font-bold">DESC</span>;
+      ? <span className="text-blue-600 ml-1 text-[10px] font-bold">↑</span>
+      : <span className="text-blue-600 ml-1 text-[10px] font-bold">↓</span>;
   };
 
   // Check for active filters
@@ -398,23 +389,10 @@ export default function ItemVolumeAnalysisView({
     if (onClearAllFilters) onClearAllFilters();
   };
 
-  // Summary stats
-  const stats = useMemo(() => {
-    const cheaperAtScale = filteredData.filter(item => getChange(item) < -0.01).length;
-    const moreExpensive = filteredData.filter(item => getChange(item) > 0.01).length;
-    const unchanged = filteredData.length - cheaperAtScale - moreExpensive;
-
-    return { total: filteredData.length, cheaperAtScale, moreExpensive, unchanged };
-  }, [filteredData, selectedView]);
-
   // Chart data for selected items
   const chartData = useMemo(() => {
-    // Get top items to show in chart (by absolute change)
-    const topItems = [...filteredData]
-      .sort((a, b) => Math.abs(getChange(b)) - Math.abs(getChange(a)))
-      .slice(0, 8);
+    const topItems = [...filteredData].slice(0, 8);
 
-    // Create data for each BOM instance quantity
     return uniqueBOMInstances.map(inst => {
       const dataPoint: Record<string, number | string> = {
         name: `${inst.qty} units`,
@@ -430,7 +408,7 @@ export default function ItemVolumeAnalysisView({
 
       return dataPoint;
     });
-  }, [filteredData, uniqueBOMInstances, selectedView]);
+  }, [filteredData, uniqueBOMInstances]);
 
   // No volume scenarios
   if (!hasVolumeScenarios || volumeAnalysisData.length === 0) {
@@ -449,59 +427,13 @@ export default function ItemVolumeAnalysisView({
 
   return (
     <div className="space-y-4">
-      {/* Filter Alert Bar */}
-      {hasActiveFilters && (
-        <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-4 flex items-center justify-between sticky top-0 z-30 shadow-md">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-orange-100 rounded-full flex items-center justify-center">
-              <svg className="w-5 h-5 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-              </svg>
-            </div>
-            <div>
-              <p className="font-bold text-orange-800">Filters Active</p>
-              <p className="text-sm text-orange-600">
-                Showing {filteredData.length} of {volumeAnalysisData.length} items
-                {!selectedVendors.includes('all') && ` | Vendor: ${selectedVendors.join(', ')}`}
-                {!selectedTags.includes('all') && ` | Category: ${selectedTags.join(', ')}`}
-                {tableSearch && ` | Search: "${tableSearch}"`}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={handleClearAllFilters}
-            className="px-4 py-2 text-sm font-bold text-white bg-red-600 rounded-lg hover:bg-red-700"
-          >
-            Reset All
-          </button>
-        </div>
-      )}
-
       {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-3 gap-4">
         <Card className="border-gray-200">
           <CardContent className="p-4">
             <div className="text-sm font-bold text-gray-700 mb-1">Total Items</div>
-            <div className="text-2xl font-bold text-blue-600">{stats.total}</div>
+            <div className="text-2xl font-bold text-blue-600">{filteredData.length}</div>
             <div className="text-xs text-gray-500 mt-1">with volume scenarios</div>
-          </CardContent>
-        </Card>
-        <Card className="border-gray-200 bg-green-50">
-          <CardContent className="p-4">
-            <div className="text-sm font-bold text-green-700 mb-1">Cheaper at Scale</div>
-            <div className="text-2xl font-bold text-green-600">{stats.cheaperAtScale}</div>
-            <div className="text-xs text-green-600 mt-1">
-              {stats.total > 0 ? `${((stats.cheaperAtScale / stats.total) * 100).toFixed(0)}%` : '0%'} of items
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-gray-200 bg-red-50">
-          <CardContent className="p-4">
-            <div className="text-sm font-bold text-red-700 mb-1">More Expensive</div>
-            <div className="text-2xl font-bold text-red-600">{stats.moreExpensive}</div>
-            <div className="text-xs text-red-600 mt-1">
-              {stats.total > 0 ? `${((stats.moreExpensive / stats.total) * 100).toFixed(0)}%` : '0%'} of items
-            </div>
           </CardContent>
         </Card>
         <Card className="border-gray-200">
@@ -511,44 +443,19 @@ export default function ItemVolumeAnalysisView({
             <div className="text-xs text-gray-500 mt-1">volume configurations</div>
           </CardContent>
         </Card>
+        <Card className={`border-gray-200 ${anomalyCount > 0 ? 'bg-orange-50' : ''}`}>
+          <CardContent className="p-4">
+            <div className="text-sm font-bold text-orange-700 mb-1">Anomalies</div>
+            <div className="text-2xl font-bold text-orange-600">{anomalyCount}</div>
+            <div className="text-xs text-orange-600 mt-1">prices not decreasing at scale</div>
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Filters and View Selection */}
+      {/* Filters and Views */}
       <Card className="border-gray-300">
         <CardContent className="p-4">
           <div className="flex items-center gap-4 flex-wrap">
-            {/* View Selector */}
-            <div className="relative filter-dropdown">
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'view' ? null : 'view'); }}
-                className="flex items-center gap-2 px-3 py-2 border border-blue-500 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium"
-              >
-                <span>View: {VIEW_OPTIONS.find(v => v.value === selectedView)?.label}</span>
-                <span className="text-gray-400">▼</span>
-              </button>
-
-              {openDropdown === 'view' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-72">
-                  <div className="p-2">
-                    {VIEW_OPTIONS.map(option => (
-                      <button
-                        key={option.value}
-                        onClick={() => { setSelectedView(option.value); setOpenDropdown(null); }}
-                        className={`w-full text-left px-3 py-2 rounded text-sm hover:bg-gray-100 ${
-                          selectedView === option.value ? 'bg-blue-50 text-blue-700' : ''
-                        }`}
-                      >
-                        <div className="font-medium">{option.label}</div>
-                        <div className="text-xs text-gray-500">{option.description}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="h-6 w-px bg-gray-300" />
-
             {/* Search */}
             <div className="relative flex-1 max-w-xs">
               <input
@@ -563,7 +470,7 @@ export default function ItemVolumeAnalysisView({
               </svg>
               {tableSearch && (
                 <button onClick={() => setTableSearch('')} className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600">
-                  x
+                  ×
                 </button>
               )}
             </div>
@@ -757,6 +664,39 @@ export default function ItemVolumeAnalysisView({
               )}
             </div>
 
+            {/* Views - Column visibility dropdown */}
+            <div className="relative filter-dropdown">
+              <button
+                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'views' ? null : 'views'); }}
+                className="flex items-center gap-2 px-3 py-2 border border-gray-300 bg-white text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50"
+              >
+                <span>Views</span>
+                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">{visibleColumns.size}</span>
+                <span className="text-gray-400">▼</span>
+              </button>
+
+              {openDropdown === 'views' && (
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-56">
+                  <div className="p-2 border-b border-gray-200">
+                    <div className="text-xs font-semibold text-gray-500 px-2 py-1">Show/Hide Columns</div>
+                  </div>
+                  <div className="p-2 max-h-64 overflow-y-auto">
+                    {columnDefs.map(col => (
+                      <label key={col.key} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.has(col.key)}
+                          onChange={() => toggleColumn(col.key)}
+                          className="rounded border-gray-300"
+                        />
+                        <span className="text-sm text-gray-700">{col.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {hasActiveFilters && (
               <button
                 onClick={handleClearAllFilters}
@@ -788,76 +728,32 @@ export default function ItemVolumeAnalysisView({
               </button>
             </div>
           </div>
-
-          {/* Active Filter Pills */}
-          {hasActiveFilters && (
-            <div className="flex items-center gap-2 mt-3 flex-wrap">
-              <span className="text-xs text-gray-500">Active filters:</span>
-
-              {!selectedVendors.includes('all') && selectedVendors.map(vendor => (
-                <span key={vendor} className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
-                  Vendor: {vendor}
-                  <button onClick={() => {
-                    const newVendors = selectedVendors.filter(v => v !== vendor);
-                    setSelectedVendors(newVendors.length ? newVendors : ['all']);
-                  }} className="hover:text-green-900 font-bold">×</button>
-                </span>
-              ))}
-
-              {!selectedTags.includes('all') && selectedTags.map(tag => (
-                <span key={tag} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">
-                  Category: {tag}
-                  <button onClick={() => {
-                    const newTags = selectedTags.filter(t => t !== tag);
-                    setSelectedTags(newTags.length ? newTags : ['all']);
-                  }} className="hover:text-purple-900 font-bold">×</button>
-                </span>
-              ))}
-
-              {!selectedBOMs.includes('all') && selectedBOMs.map(bom => (
-                <span key={bom} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
-                  BOM: {bom.split(' > ').pop()}
-                  <button onClick={() => {
-                    const newBOMs = selectedBOMs.filter(b => b !== bom);
-                    setSelectedBOMs(newBOMs.length ? newBOMs : ['all']);
-                  }} className="hover:text-blue-900 font-bold">×</button>
-                </span>
-              ))}
-
-              {tableSearch && (
-                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 rounded text-xs">
-                  Search: "{tableSearch}"
-                  <button onClick={() => setTableSearch('')} className="hover:text-gray-900 font-bold">×</button>
-                </span>
-              )}
-            </div>
-          )}
         </CardContent>
       </Card>
 
       {/* TABLE VIEW */}
       {displayMode === 'table' && (
-        <>
-          <Card className="border-gray-300 shadow-sm">
-            <CardContent className="p-0">
-              <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
-                <div>
-                  <h4 className="font-bold text-gray-900 text-sm">
-                    {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison
-                  </h4>
-                  <p className="text-xs text-gray-600 mt-0.5">
-                    {VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
-                  </p>
-                </div>
-                <div className="text-xs text-gray-600">
-                  Showing {paginatedData.length} of {filteredData.length} items
-                </div>
+        <Card className="border-gray-300 shadow-sm">
+          <CardContent className="p-0">
+            <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  Quoted Rate Comparison
+                </h4>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  Compare item rates across different BOM quantities
+                </p>
               </div>
+              <div className="text-xs text-gray-600">
+                Showing {paginatedData.length} of {filteredData.length} items
+              </div>
+            </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-100 border-b border-gray-300">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-100 border-b border-gray-300">
+                    {visibleColumns.has('item_code') && (
                       <th
                         className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200 sticky left-0 bg-gray-100 z-10"
                         onClick={() => handleSort('item_code')}
@@ -865,6 +761,8 @@ export default function ItemVolumeAnalysisView({
                       >
                         Item Code {renderSortIndicator('item_code')}
                       </th>
+                    )}
+                    {visibleColumns.has('item_name') && (
                       <th
                         className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
                         onClick={() => handleSort('item_name')}
@@ -872,13 +770,17 @@ export default function ItemVolumeAnalysisView({
                       >
                         Item Name {renderSortIndicator('item_name')}
                       </th>
+                    )}
+                    {visibleColumns.has('vendor_name') && (
                       <th
                         className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
                         onClick={() => handleSort('vendor_name')}
-                        style={{ minWidth: '100px' }}
+                        style={{ minWidth: '120px' }}
                       >
                         Vendor {renderSortIndicator('vendor_name')}
                       </th>
+                    )}
+                    {visibleColumns.has('bom_path') && (
                       <th
                         className="px-4 py-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
                         onClick={() => handleSort('bom_path')}
@@ -886,172 +788,157 @@ export default function ItemVolumeAnalysisView({
                       >
                         BOM Hierarchy {renderSortIndicator('bom_path')}
                       </th>
-                      {uniqueBOMInstances.map(inst => (
-                        <th
-                          key={inst.id}
-                          className="px-4 py-3 text-right font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
-                          onClick={() => handleSort(inst.id)}
-                          style={{ minWidth: '120px' }}
-                        >
-                          {inst.label} {renderSortIndicator(inst.id)}
-                        </th>
-                      ))}
+                    )}
+                    {uniqueBOMInstances.map(inst => (
                       <th
+                        key={inst.id}
                         className="px-4 py-3 text-right font-semibold text-gray-700 cursor-pointer hover:bg-gray-200"
-                        onClick={() => handleSort('change_percent')}
-                        style={{ minWidth: '100px' }}
+                        onClick={() => handleSort(inst.id)}
+                        style={{ minWidth: '120px' }}
                       >
-                        Change % {renderSortIndicator('change_percent')}
+                        {inst.label} {renderSortIndicator(inst.id)}
                       </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedData.map((item, idx) => {
-                      const change = getChange(item);
-                      const firstValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedData.map((item, idx) => {
+                    const lowestQtyValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
 
-                      return (
-                        <tr key={item.item_code} className={`border-b border-gray-200 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                    return (
+                      <tr key={`${item.item_code}-${item.bom_path}`} className={`border-b border-gray-200 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                        {visibleColumns.has('item_code') && (
                           <td className="px-4 py-3 font-mono text-blue-600 sticky left-0 bg-inherit z-10">
                             {item.item_code}
                           </td>
+                        )}
+                        {visibleColumns.has('item_name') && (
                           <td className="px-4 py-3 text-gray-900">
                             <div className="truncate max-w-[200px]" title={item.item_name}>
                               {item.item_name}
                             </div>
                           </td>
+                        )}
+                        {visibleColumns.has('vendor_name') && (
                           <td className="px-4 py-3 text-gray-700">
                             {item.vendor_name || '-'}
                           </td>
+                        )}
+                        {visibleColumns.has('bom_path') && (
                           <td className="px-4 py-3 text-blue-700 font-mono text-xs">
                             <span title={item.bom_path}>{item.bom_path}</span>
                           </td>
-                          {uniqueBOMInstances.map(inst => {
-                            const instance = item.instances.find(i => i.bom_instance_id === inst.id);
-                            const value = instance ? getValue(instance) : null;
-                            const isDifferent = value !== null && firstValue !== 0 && Math.abs(value - firstValue) / firstValue > 0.001;
-                            const isCheaper = value !== null && value < firstValue;
+                        )}
+                        {uniqueBOMInstances.map((inst, instIdx) => {
+                          const instance = item.instances.find(i => i.bom_instance_id === inst.id);
+                          const value = instance ? getValue(instance) : null;
 
-                            return (
-                              <td
-                                key={inst.id}
-                                className={`px-4 py-3 text-right font-mono ${
-                                  isDifferent
-                                    ? isCheaper
-                                      ? 'bg-green-50 text-green-700'
-                                      : 'bg-red-50 text-red-700'
-                                    : 'text-gray-900'
-                                }`}
-                              >
-                                {value !== null
-                                  ? `${currencySymbol}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                                  : '-'
-                                }
-                              </td>
-                            );
-                          })}
-                          <td className={`px-4 py-3 text-right font-mono font-semibold ${
-                            change < -0.01 ? 'text-green-600' : change > 0.01 ? 'text-red-600' : 'text-gray-600'
-                          }`}>
-                            {change < -0.01 ? '' : change > 0.01 ? '+' : ''}{change.toFixed(1)}%
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          // Anomaly detection: only highlight if price at higher qty is same or more
+                          const isAnomaly = instIdx > 0 && value !== null && lowestQtyValue > 0 && value >= lowestQtyValue;
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600">Rows per page:</span>
-                    <select
-                      value={pageSize}
-                      onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
-                      className="px-2 py-1 border border-gray-300 rounded text-xs"
-                    >
-                      <option value={10}>10</option>
-                      <option value={20}>20</option>
-                      <option value={50}>50</option>
-                      <option value={100}>100</option>
-                    </select>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600">
-                      Page {currentPage} of {totalPages}
-                    </span>
-                    <button
-                      onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                      disabled={currentPage === 1}
-                      className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-                    >
-                      Prev
-                    </button>
-                    <button
-                      onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-                      disabled={currentPage === totalPages}
-                      className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
-                    >
-                      Next
-                    </button>
-                  </div>
+                          return (
+                            <td
+                              key={inst.id}
+                              className={`px-4 py-3 text-right font-mono ${
+                                isAnomaly ? 'bg-orange-100 text-orange-700 font-semibold' : 'text-gray-900'
+                              }`}
+                            >
+                              {value !== null
+                                ? `${currencySymbol}${value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : '-'
+                              }
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600">Rows per page:</span>
+                  <select
+                    value={pageSize}
+                    onChange={(e) => { setPageSize(Number(e.target.value)); setCurrentPage(1); }}
+                    className="px-2 py-1 border border-gray-300 rounded text-xs"
+                  >
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                    <option value={50}>50</option>
+                    <option value={100}>100</option>
+                  </select>
                 </div>
-              )}
-            </CardContent>
-          </Card>
-
-        </>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-600">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                    disabled={currentPage === 1}
+                    className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Prev
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
+                    disabled={currentPage === totalPages}
+                    className="px-2 py-1 border border-gray-300 rounded text-xs disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {/* CHART VIEW */}
       {displayMode === 'chart' && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Price Trend Chart */}
-          <Card className="border-gray-300 shadow-sm lg:col-span-2">
-            <CardContent className="p-4">
-              <h4 className="font-bold text-gray-900 text-sm mb-4">
-                {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Trend Across Volumes
-              </h4>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                    <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${currencySymbol}${v}`} />
-                    <Tooltip
-                      formatter={(value: number) => [`${currencySymbol}${value.toFixed(2)}`, '']}
-                      labelStyle={{ fontWeight: 'bold' }}
-                    />
-                    <Legend />
-                    {[...filteredData]
-                      .sort((a, b) => Math.abs(getChange(b)) - Math.abs(getChange(a)))
-                      .slice(0, 8)
-                      .map((item, idx) => (
-                        <Line
-                          key={item.item_code}
-                          type="monotone"
-                          dataKey={item.item_code}
-                          name={item.item_code}
-                          stroke={CHART_COLORS[idx % CHART_COLORS.length]}
-                          strokeWidth={2}
-                          dot={{ r: 4 }}
-                          activeDot={{ r: 6 }}
-                        />
-                      ))}
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-              <p className="text-xs text-gray-500 mt-2">
-                Showing top 8 items with highest price variation across volumes
-              </p>
-            </CardContent>
-          </Card>
-
-        </div>
+        <Card className="border-gray-300 shadow-sm">
+          <CardContent className="p-4">
+            <h4 className="font-bold text-gray-900 text-sm mb-4">
+              Quoted Rate Trend Across Volumes
+            </h4>
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
+                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${currencySymbol}${v}`} />
+                  <Tooltip
+                    formatter={(value: number) => [`${currencySymbol}${value.toFixed(2)}`, '']}
+                    labelStyle={{ fontWeight: 'bold' }}
+                  />
+                  <Legend />
+                  {[...filteredData]
+                    .slice(0, 8)
+                    .map((item, idx) => (
+                      <Line
+                        key={item.item_code}
+                        type="monotone"
+                        dataKey={item.item_code}
+                        name={item.item_code}
+                        stroke={CHART_COLORS[idx % CHART_COLORS.length]}
+                        strokeWidth={2}
+                        dot={{ r: 4 }}
+                        activeDot={{ r: 6 }}
+                      />
+                    ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Showing first 8 items. Orange highlighted values indicate anomalies (price not decreasing at scale).
+            </p>
+          </CardContent>
+        </Card>
       )}
-
     </div>
   );
 }

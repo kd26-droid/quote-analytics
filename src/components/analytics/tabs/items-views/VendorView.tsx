@@ -323,6 +323,9 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
       vendorMap.set(item.vendor_id, current);
     });
 
+    // Calculate total cost for percentage calculation
+    const totalCostSum = Array.from(vendorMap.values()).reduce((sum, v) => sum + v.totalCost, 0);
+
     return Array.from(vendorMap.values())
       .map(stats => ({
         vendor: stats.vendor_name,
@@ -330,7 +333,7 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
         items: stats.items,
         totalCost: stats.totalCost,
         avgRate: stats.totalQuantity > 0 ? stats.totalCost / stats.totalQuantity : 0,
-        percentOfQuote: baseFilteredItems.length > 0 ? (stats.items / baseFilteredItems.length) * 100 : 0
+        percentOfQuote: totalCostSum > 0 ? (stats.totalCost / totalCostSum) * 100 : 0
       }))
       .filter(v => v.totalCost >= minCost && v.items >= minItemCount);
   }, [baseFilteredItems, minCost, minItemCount]);

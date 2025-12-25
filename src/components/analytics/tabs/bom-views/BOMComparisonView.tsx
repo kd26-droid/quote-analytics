@@ -281,37 +281,38 @@ export default function BOMComparisonView({
     return Array.from(levels).sort();
   }, [allBOMNodes]);
 
-  // Get all categories and vendors from items
+  // Get all categories and vendors from costViewData (real API data)
   const { availableCategories, availableVendors } = useMemo(() => {
     const categories = new Set<string>();
     const vendors = new Set<string>();
 
-    data.overall.forEach(item => {
-      if (item.category) categories.add(item.category);
-      if (item.vendor) vendors.add(item.vendor);
-    });
+    if (costViewData?.items) {
+      costViewData.items.forEach(item => {
+        if (item.tags) item.tags.forEach(tag => categories.add(tag));
+        if (item.vendor_name) vendors.add(item.vendor_name);
+      });
+    }
 
     return {
       availableCategories: Array.from(categories).sort(),
       availableVendors: Array.from(vendors).sort()
     };
-  }, [data.overall]);
+  }, [costViewData]);
 
-  // Calculate item count per BOM path
+  // Calculate DIRECT item count per BOM path (not recursive - only items directly in this BOM)
   const bomItemCounts = useMemo(() => {
     const counts = new Map<string, number>();
 
-    const countItems = (node: BOMNode): number => {
-      const directCount = node.items.length;
-      const childrenCount = node.children.reduce((sum, child) => sum + countItems(child), 0);
-      const totalCount = directCount + childrenCount;
-      counts.set(node.path, totalCount);
-      return totalCount;
-    };
+    // Count items directly in each BOM path from costViewData
+    if (costViewData?.items) {
+      costViewData.items.forEach(item => {
+        const bomPath = item.bom_path || '';
+        counts.set(bomPath, (counts.get(bomPath) || 0) + 1);
+      });
+    }
 
-    bomTree.forEach(countItems);
     return counts;
-  }, [bomTree]);
+  }, [costViewData]);
 
   // Filter BOM nodes
   const filteredNodes = useMemo(() => {
@@ -326,11 +327,20 @@ export default function BOMComparisonView({
       );
     }
 
-    // BOM filter
+    // BOM filter - include node if it matches OR if any ancestor matches
     if (!selectedBOMs.includes('all')) {
-      nodes = nodes.filter(node =>
-        selectedBOMs.includes(node.code) || selectedBOMs.includes(node.parentBomCode)
-      );
+      nodes = nodes.filter(node => {
+        // Check if this node's code matches
+        if (selectedBOMs.includes(node.code)) return true;
+
+        // Check if any part of the hierarchy path matches (for sub-BOMs)
+        if (node.hierarchyPath) {
+          const pathParts = node.hierarchyPath.split(' > ');
+          return pathParts.some(part => selectedBOMs.includes(part));
+        }
+
+        return false;
+      });
     }
 
     // Level filter
@@ -342,7 +352,10 @@ export default function BOMComparisonView({
     if (!selectedCategories.includes('all')) {
       nodes = nodes.filter(node => {
         const nodeItems = node.items;
-        return nodeItems.some((item: any) => selectedCategories.includes(item.category));
+        return nodeItems.some((item: any) => {
+          // Check if any of the item's tags match the selected categories
+          return item.tags && item.tags.some((tag: string) => selectedCategories.includes(tag));
+        });
       });
     }
 
@@ -350,7 +363,7 @@ export default function BOMComparisonView({
     if (!selectedVendors.includes('all')) {
       nodes = nodes.filter(node => {
         const nodeItems = node.items;
-        return nodeItems.some((item: any) => selectedVendors.includes(item.vendor));
+        return nodeItems.some((item: any) => selectedVendors.includes(item.vendor_name));
       });
     }
 
@@ -436,44 +449,41 @@ export default function BOMComparisonView({
     return sortedNodes.slice(start, start + pageSize);
   }, [sortedNodes, currentPage, pageSize]);
 
-  // Key insights
+  // Key insights - sum only Main BOMs from ALL nodes (not filtered) for stable totals
   const insights = useMemo(() => {
-    const totalBOMCost = filteredNodes.reduce((sum, node) => sum + node.totalCost, 0);
-    const totalItemsCost = filteredNodes.reduce((sum, node) => sum + node.itemsSubtotal, 0);
-    const totalBOMAC = filteredNodes.reduce((sum, node) => sum + node.bomAC, 0);
+    // Always use allBOMNodes level 0 for stable totals
+    const allMainBOMs = allBOMNodes.filter(n => n.level === 0);
+    const totalBOMCost = allMainBOMs.reduce((sum, node) => sum + node.totalCost, 0);
+    const totalItemsCost = allMainBOMs.reduce((sum, node) => sum + node.itemsSubtotal, 0);
+    const totalBOMAC = allMainBOMs.reduce((sum, node) => sum + node.bomAC, 0);
 
-    // Count by level
-    const mainBOMs = filteredNodes.filter(n => n.level === 0).length;
-    const subBOMs = filteredNodes.filter(n => n.level === 1).length;
-    const subSubBOMs = filteredNodes.filter(n => n.level >= 2).length;
+    // Count by level from allBOMNodes for stable counts
+    const mainBOMs = allMainBOMs.length;
+    const subBOMs = allBOMNodes.filter(n => n.level === 1).length;
+    const subSubBOMs = allBOMNodes.filter(n => n.level >= 2).length;
 
     return {
       totalBOMCost,
       totalItemsCost,
       totalBOMAC,
-      bomCount: filteredNodes.length,
+      bomCount: allBOMNodes.length,
       mainBOMs,
       subBOMs,
       subSubBOMs
     };
-  }, [filteredNodes]);
+  }, [allBOMNodes]);
 
-  // Chart data - show BOMs in hierarchy order (depth-first), NOT by cost
-  // So: QAB1 (Main), QASB1 (Sub), QASSB1 (Sub-Sub under QASB1), QASB2 (Sub)
+  // Chart data - always show all BOMs in hierarchy order for stability
+  // Filters only affect the table, not the charts
   const chartData = useMemo(() => {
-    // Use the already-sorted allBOMNodes which is in depth-first hierarchy order
-    // Filter to only include nodes that pass the current filters
-    const inHierarchyOrder = allBOMNodes.filter(node =>
-      filteredNodes.some(fn => fn.path === node.path)
-    );
-
-    return inHierarchyOrder.slice(0, 10).map((node, index) => ({
+    // Always use allBOMNodes for stable charts
+    return allBOMNodes.slice(0, 10).map((node, index) => ({
       ...node,
       itemCount: bomItemCounts.get(node.path) || 0,
       acPercentOfBOM: node.totalCost > 0 ? (node.bomAC / node.totalCost) * 100 : 0,
       color: COLORS[index % COLORS.length]
     }));
-  }, [allBOMNodes, filteredNodes, bomItemCounts]);
+  }, [allBOMNodes, bomItemCounts]);
 
   // Check if filters are active
   const hasActiveFilters = !selectedBOMs.includes('all') || selectedLevels.length > 0 ||
@@ -769,14 +779,15 @@ export default function BOMComparisonView({
                 Click level to filter, costs aggregated by BOM level
               </p>
 
-              {/* Level breakdown */}
+              {/* Level breakdown - uses allBOMNodes to always show all levels */}
               <div className="space-y-4">
                 {availableLevels.map((level, index) => {
-                  const levelNodes = filteredNodes.filter(n => n.level === level);
+                  // Use allBOMNodes (not filteredNodes) to always show full level data
+                  const levelNodes = allBOMNodes.filter(n => n.level === level);
                   const levelCost = levelNodes.reduce((sum, n) => sum + n.totalCost, 0);
                   const levelAC = levelNodes.reduce((sum, n) => sum + n.bomAC, 0);
                   const maxCost = Math.max(...availableLevels.map(l =>
-                    filteredNodes.filter(n => n.level === l).reduce((sum, n) => sum + n.totalCost, 0)
+                    allBOMNodes.filter(n => n.level === l).reduce((sum, n) => sum + n.totalCost, 0)
                   ));
                   const widthPercent = maxCost > 0 ? (levelCost / maxCost) * 100 : 0;
                   const isSelected = selectedLevels.includes(level);

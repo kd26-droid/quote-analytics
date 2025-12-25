@@ -7,14 +7,13 @@ import CategoryView from './items-views/CategoryView';
 import RateView from './items-views/RateView';
 import AdditionalCostsView from './items-views/AdditionalCostsView';
 import CustomView from './items-views/CustomView';
-import ItemSourceView from './items-views/ItemSourceView';
 import ItemVolumeAnalysisView from './items-views/ItemVolumeAnalysisView';
 import { useBOMInstances } from '../../../hooks/useBOMInstances';
 import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation, BOMCostComparison } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
 import type { CostViewData } from '../../../services/api';
 
-export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'item-source' | 'volume-analysis' | 'custom';
+export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'volume-analysis' | 'custom';
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
@@ -49,15 +48,6 @@ export default function ItemsTab({
 }: ItemsTabProps) {
   const [selectedView, setSelectedView] = useState<ItemViewType>('cost');
 
-  // Handle navigation context to switch views automatically
-  React.useEffect(() => {
-    if (navigationContext.selectedCategory) {
-      setSelectedView('category');
-    } else if (navigationContext.selectedVendor) {
-      setSelectedView('vendor');
-    }
-  }, [navigationContext]);
-
   // Use shared hook to detect volume scenarios from costViewData
   const { hasVolumeScenarios } = useBOMInstances(costViewData?.items || []);
 
@@ -67,13 +57,28 @@ export default function ItemsTab({
     { id: 'category' as ItemViewType, label: 'Category View', icon: '📑' },
     { id: 'rate' as ItemViewType, label: 'Rate View', icon: '📊' },
     { id: 'additional-costs' as ItemViewType, label: 'Additional Costs', icon: '💸' },
-    { id: 'item-source' as ItemViewType, label: 'Item Source', icon: '🔄' },
     ...(hasVolumeScenarios
       ? [{ id: 'volume-analysis' as ItemViewType, label: 'Volume Analysis', icon: '📈' }]
       : []
     ),
     { id: 'custom' as ItemViewType, label: 'Custom View', icon: '⚙️' }
   ];
+
+  // Handle navigation context to switch views automatically
+  React.useEffect(() => {
+    const validViews: ItemViewType[] = ['cost', 'vendor', 'category', 'rate', 'additional-costs', 'volume-analysis', 'custom'];
+    if (navigationContext.targetView) {
+      // Navigate to specific view (e.g., from Summary "View All Items in Cost View")
+      const viewId = navigationContext.targetView as ItemViewType;
+      if (validViews.includes(viewId)) {
+        setSelectedView(viewId);
+      }
+    } else if (navigationContext.selectedCategory) {
+      setSelectedView('category');
+    } else if (navigationContext.selectedVendor) {
+      setSelectedView('vendor');
+    }
+  }, [navigationContext]);
 
   return (
     <div className="space-y-4">
@@ -167,14 +172,6 @@ export default function ItemsTab({
             navigationContext={navigationContext}
             filterResetKey={filterResetKey}
             onClearAllFilters={clearAllFilters}
-          />
-        )}
-        {selectedView === 'item-source' && (
-          <ItemSourceView
-            data={data}
-            totalQuoteValue={totalQuoteValue}
-            navigationContext={navigationContext}
-            navigateToTab={navigateToTab}
           />
         )}
         {selectedView === 'volume-analysis' && hasVolumeScenarios && costViewData && (
