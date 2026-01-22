@@ -4,6 +4,8 @@ import type { BOMCostComparison, TopItemsAnalytics } from '../../../../types/quo
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import type { BOMViewType } from '../BOMTab';
 import type { BOMDetailData, CostViewData } from '../../../../services/api';
+import { useHierarchicalBOMFilter, BOM_LEVEL_LABELS, BOM_LEVEL_COLORS } from '../../../../hooks/useHierarchicalBOMFilter';
+import HierarchicalBOMDropdown from '../../shared/HierarchicalBOMDropdown';
 
 interface BOMComparisonViewProps {
   bomCostComparison: BOMCostComparison[];
@@ -36,17 +38,9 @@ interface BOMNode {
   hierarchyPath?: string; // Full path like "QAB1 > QASB1 > QASSB1"
 }
 
-const LEVEL_LABELS: Record<number, string> = {
-  0: 'Main BOM',
-  1: 'Sub-BOM',
-  2: 'Sub-Sub-BOM',
-  3: 'L3-BOM',
-  4: 'L4-BOM',
-};
-
-// Helper to get level label
+// Helper to get level label (uses imported BOM_LEVEL_LABELS)
 const getLevelLabel = (level: number): string => {
-  return LEVEL_LABELS[level] || `L${level} BOM`;
+  return BOM_LEVEL_LABELS[level] || `L${level} BOM`;
 };
 
 export default function BOMComparisonView({
@@ -66,9 +60,10 @@ export default function BOMComparisonView({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  // Filters
-  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
-  const [selectedLevels, setSelectedLevels] = useState<number[]>([]); // empty = all
+  // Hierarchical BOM Filter (matches Factwise behavior)
+  const bomFilter = useHierarchicalBOMFilter(bomDetailData);
+
+  // Other filters
   const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
   const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
   const [searchQuery, setSearchQuery] = useState('');
@@ -77,9 +72,8 @@ export default function BOMComparisonView({
   const [chartViewMode, setChartViewMode] = useState<'cost' | 'ac'>('cost');
   const [sortColumn, setSortColumn] = useState<string>('hierarchy'); // Default: hierarchy order
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [openDropdown, setOpenDropdown] = useState<'bom' | 'level' | 'category' | 'vendor' | 'columns' | null>(null);
+  const [openDropdown, setOpenDropdown] = useState<'category' | 'vendor' | 'columns' | null>(null);
   const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
-  const [bomSearch, setBomSearch] = useState('');
   const [categorySearch, setCategorySearch] = useState('');
   const [vendorSearch, setVendorSearch] = useState('');
 
@@ -105,16 +99,21 @@ export default function BOMComparisonView({
   // Auto-select BOM from navigation context
   useEffect(() => {
     if (navigationContext?.selectedBOM) {
-      const bomCode = navigationContext.selectedBOM.split('.')[0];
-      setSelectedBOMs([bomCode]);
+      // Find the matching node by path or code
+      const matchingNode = bomFilter.allNodes.find(n =>
+        n.path === navigationContext.selectedBOM ||
+        n.code === navigationContext.selectedBOM
+      );
+      if (matchingNode) {
+        bomFilter.setSelectedEntryId(matchingNode.entryId);
+      }
     }
-  }, [navigationContext]);
+  }, [navigationContext, bomFilter.allNodes]);
 
   // Reset ALL local filters when filterResetKey changes (triggered by parent clearAllFilters)
   useEffect(() => {
     if (filterResetKey !== undefined && filterResetKey > 0) {
-      setSelectedBOMs(['all']);
-      setSelectedLevels([]);
+      bomFilter.setSelectedEntryId(null);
       setSelectedCategories(['all']);
       setSelectedVendors(['all']);
       setSearchQuery('');
@@ -125,7 +124,7 @@ export default function BOMComparisonView({
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedBOMs, selectedLevels, selectedCategories, selectedVendors, searchQuery]);
+  }, [bomFilter.selectedEntryId, selectedCategories, selectedVendors, searchQuery]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -152,16 +151,6 @@ export default function BOMComparisonView({
     return newSelection;
   };
 
-  // Toggle level selection
-  const toggleLevel = (level: number) => {
-    setSelectedLevels(prev => {
-      if (prev.includes(level)) {
-        return prev.filter(l => l !== level);
-      } else {
-        return [...prev, level];
-      }
-    });
-  };
 
   // Check if we have real API data
   const hasRealData = bomDetailData && bomDetailData.bom_instances && bomDetailData.bom_instances.length > 0;
@@ -314,7 +303,7 @@ export default function BOMComparisonView({
     return counts;
   }, [costViewData]);
 
-  // Filter BOM nodes
+  // Filter BOM nodes using hierarchical filter
   const filteredNodes = useMemo(() => {
     let nodes = [...allBOMNodes];
 
@@ -327,25 +316,14 @@ export default function BOMComparisonView({
       );
     }
 
-    // BOM filter - include node if it matches OR if any ancestor matches
-    if (!selectedBOMs.includes('all')) {
+    // Hierarchical BOM filter - matches Factwise behavior:
+    // When a BOM is selected, show it AND all its descendants
+    // Uses the proper entry_id based filtering from the hook
+    if (bomFilter.selectedEntryId) {
       nodes = nodes.filter(node => {
-        // Check if this node's code matches
-        if (selectedBOMs.includes(node.code)) return true;
-
-        // Check if any part of the hierarchy path matches (for sub-BOMs)
-        if (node.hierarchyPath) {
-          const pathParts = node.hierarchyPath.split(' > ');
-          return pathParts.some(part => selectedBOMs.includes(part));
-        }
-
-        return false;
+        // Check if this node's path matches any visible node from the filter
+        return bomFilter.isNodeVisibleByPath(node.path);
       });
-    }
-
-    // Level filter
-    if (selectedLevels.length > 0) {
-      nodes = nodes.filter(node => selectedLevels.includes(node.level));
     }
 
     // Category filter - filter BOMs that contain items from selected categories
@@ -368,7 +346,7 @@ export default function BOMComparisonView({
     }
 
     return nodes;
-  }, [allBOMNodes, searchQuery, selectedBOMs, selectedLevels, selectedCategories, selectedVendors]);
+  }, [allBOMNodes, searchQuery, bomFilter.selectedEntryId, bomFilter.isNodeVisibleByPath, selectedCategories, selectedVendors]);
 
   // Sort filtered nodes
   const sortedNodes = useMemo(() => {
@@ -486,13 +464,12 @@ export default function BOMComparisonView({
   }, [allBOMNodes, bomItemCounts]);
 
   // Check if filters are active
-  const hasActiveFilters = !selectedBOMs.includes('all') || selectedLevels.length > 0 ||
+  const hasActiveFilters = bomFilter.selectedEntryId !== null ||
     !selectedCategories.includes('all') || !selectedVendors.includes('all') || searchQuery.trim() !== '';
 
   // Clear all filters - also triggers global reset via parent
   const handleClearAllFilters = () => {
-    setSelectedBOMs(['all']);
-    setSelectedLevels([]);
+    bomFilter.setSelectedEntryId(null);
     setSelectedCategories(['all']);
     setSelectedVendors(['all']);
     setSearchQuery('');
@@ -539,13 +516,7 @@ export default function BOMComparisonView({
     });
   };
 
-  // Filtered lists for dropdowns
-  const filteredBOMList = useMemo(() => {
-    const uniqueCodes = [...new Set(bomTree.map(b => b.code))];
-    if (!bomSearch.trim()) return uniqueCodes;
-    return uniqueCodes.filter(code => code.toLowerCase().includes(bomSearch.toLowerCase()));
-  }, [bomTree, bomSearch]);
-
+  // Filtered lists for dropdowns - show ALL BOMs (main + sub) in hierarchy order
   const filteredCategoryList = useMemo(() => {
     if (!categorySearch.trim()) return availableCategories;
     return availableCategories.filter(c => c.toLowerCase().includes(categorySearch.toLowerCase()));
@@ -607,8 +578,7 @@ export default function BOMComparisonView({
               <p className="font-bold text-orange-800">Filters Active</p>
               <p className="text-sm text-orange-600">
                 Showing {filteredNodes.length} of {allBOMNodes.length} rows ({insights.mainBOMs} Main + {insights.subBOMs} Sub + {insights.subSubBOMs} Sub-Sub)
-                {selectedLevels.length > 0 && ` | Level: ${selectedLevels.map(l => LEVEL_LABELS[l] || `L${l}`).join(', ')}`}
-                {!selectedBOMs.includes('all') && ` | ${selectedBOMs.length} BOM(s)`}
+                {bomFilter.selectedNode && ` | Filtered to: ${bomFilter.selectedNode.code}`}
               </p>
             </div>
           </div>
@@ -721,7 +691,7 @@ export default function BOMComparisonView({
                   const maxVal = chartData[0] ? (chartViewMode === 'cost' ? chartData[0].totalCost : chartData[0].bomAC) : 1;
                   const currentVal = chartViewMode === 'cost' ? node.totalCost : node.bomAC;
                   const widthPercent = maxVal > 0 ? (currentVal / maxVal) * 100 : 0;
-                  const isSelected = selectedBOMs.includes(node.code);
+                  const isSelected = bomFilter.isNodeVisibleByPath(node.path) && bomFilter.selectedEntryId !== null;
 
                   return (
                     <div
@@ -739,7 +709,7 @@ export default function BOMComparisonView({
                           node.level === 1 ? 'bg-green-100 text-green-700' :
                           'bg-purple-100 text-purple-700'
                         }`}>
-                          {LEVEL_LABELS[node.level] || `L${node.level}-BOM`}
+                          {BOM_LEVEL_LABELS[node.level] || `L${node.level}-BOM`}
                         </span>
                         <span className="flex-1 text-sm font-medium text-gray-900 truncate" title={node.name}>
                           {node.code}
@@ -779,26 +749,22 @@ export default function BOMComparisonView({
                 Click level to filter, costs aggregated by BOM level
               </p>
 
-              {/* Level breakdown - uses allBOMNodes to always show all levels */}
+              {/* Level breakdown - summary display */}
               <div className="space-y-4">
                 {availableLevels.map((level, index) => {
-                  // Use allBOMNodes (not filteredNodes) to always show full level data
-                  const levelNodes = allBOMNodes.filter(n => n.level === level);
+                  // Use filteredNodes to show level data based on current filter
+                  const levelNodes = filteredNodes.filter(n => n.level === level);
                   const levelCost = levelNodes.reduce((sum, n) => sum + n.totalCost, 0);
                   const levelAC = levelNodes.reduce((sum, n) => sum + n.bomAC, 0);
                   const maxCost = Math.max(...availableLevels.map(l =>
-                    allBOMNodes.filter(n => n.level === l).reduce((sum, n) => sum + n.totalCost, 0)
-                  ));
+                    filteredNodes.filter(n => n.level === l).reduce((sum, n) => sum + n.totalCost, 0)
+                  ), 1);
                   const widthPercent = maxCost > 0 ? (levelCost / maxCost) * 100 : 0;
-                  const isSelected = selectedLevels.includes(level);
 
                   return (
                     <div
                       key={level}
-                      className={`cursor-pointer rounded-lg p-3 transition-all ${
-                        isSelected ? 'bg-green-100 ring-2 ring-green-500' : 'hover:bg-gray-50'
-                      }`}
-                      onClick={() => toggleLevel(level)}
+                      className="rounded-lg p-3 bg-gray-50"
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
@@ -807,7 +773,7 @@ export default function BOMComparisonView({
                             level === 1 ? 'bg-green-100 text-green-700' :
                             'bg-purple-100 text-purple-700'
                           }`}>
-                            {LEVEL_LABELS[level] || `L${level}-BOM`}
+                            {BOM_LEVEL_LABELS[level] || `L${level}-BOM`}
                           </span>
                           <span className="text-sm text-gray-600">{levelNodes.length} BOM{levelNodes.length !== 1 ? 's' : ''}</span>
                         </div>
@@ -866,126 +832,13 @@ export default function BOMComparisonView({
               </svg>
             </div>
 
-            {/* BOM Filter Dropdown */}
-            <div className="relative filter-dropdown">
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'bom' ? null : 'bom'); }}
-                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
-                  !selectedBOMs.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                <span>BOM</span>
-                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
-                  {selectedBOMs.includes('all') ? 'All' : selectedBOMs.length}
-                </span>
-                <span className="text-gray-400">▼</span>
-              </button>
-
-              {openDropdown === 'bom' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
-                  <div className="p-2 border-b border-gray-200">
-                    <input
-                      type="text"
-                      placeholder="Search BOMs..."
-                      value={bomSearch}
-                      onChange={(e) => setBomSearch(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </div>
-                  <div className="px-2 py-2 border-b border-gray-100">
-                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedBOMs.includes('all')}
-                        onChange={() => setSelectedBOMs(['all'])}
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-sm font-medium text-gray-900">All BOMs ({filteredBOMList.length})</span>
-                    </label>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto py-1">
-                    {filteredBOMList.map(code => (
-                      <label
-                        key={code}
-                        className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-100 cursor-pointer ${
-                          selectedBOMs.includes(code) ? 'bg-blue-50' : ''
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedBOMs.includes(code)}
-                          onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, code))}
-                          className="rounded border-gray-300"
-                        />
-                        <span className="text-sm text-gray-700">{code}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t border-gray-200 flex justify-between">
-                    <button onClick={() => setSelectedBOMs(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
-                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Level Filter Dropdown */}
-            <div className="relative filter-dropdown">
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'level' ? null : 'level'); }}
-                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium transition-colors ${
-                  selectedLevels.length > 0 ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                <span>Level</span>
-                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">
-                  {selectedLevels.length === 0 ? 'All' : selectedLevels.length}
-                </span>
-                <span className="text-gray-400">▼</span>
-              </button>
-
-              {openDropdown === 'level' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-56">
-                  <div className="p-2">
-                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={selectedLevels.length === 0}
-                        onChange={() => setSelectedLevels([])}
-                        className="rounded border-gray-300"
-                      />
-                      <span className="text-sm font-medium text-gray-900">All Levels</span>
-                    </label>
-                    {availableLevels.map(level => (
-                      <label
-                        key={level}
-                        className={`flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer ${
-                          selectedLevels.includes(level) ? 'bg-green-50' : ''
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedLevels.includes(level)}
-                          onChange={() => toggleLevel(level)}
-                          className="rounded border-gray-300"
-                        />
-                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                          level === 0 ? 'bg-blue-100 text-blue-700' :
-                          level === 1 ? 'bg-green-100 text-green-700' :
-                          'bg-purple-100 text-purple-700'
-                        }`}>
-                          {LEVEL_LABELS[level] || `L${level}-BOM`}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t border-gray-200">
-                    <button onClick={() => setOpenDropdown(null)} className="w-full px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Hierarchical BOM Filter - matches Factwise behavior */}
+            <HierarchicalBOMDropdown
+              options={bomFilter.dropdownOptions}
+              selectedEntryId={bomFilter.selectedEntryId}
+              onSelect={bomFilter.setSelectedEntryId}
+              placeholder="Filter by BOM"
+            />
 
             {/* Category Filter Dropdown */}
             <div className="relative filter-dropdown">
@@ -1183,22 +1036,12 @@ export default function BOMComparisonView({
             <div className="flex items-center gap-2 mt-3 flex-wrap">
               <span className="text-xs text-gray-500">Active filters:</span>
 
-              {!selectedBOMs.includes('all') && selectedBOMs.map(code => (
-                <span key={code} className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
-                  BOM: {code}
-                  <button onClick={() => {
-                    const newBOMs = selectedBOMs.filter(b => b !== code);
-                    setSelectedBOMs(newBOMs.length ? newBOMs : ['all']);
-                  }} className="hover:text-blue-900">×</button>
+              {bomFilter.selectedNode && (
+                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs">
+                  BOM: {bomFilter.selectedNode.code} ({BOM_LEVEL_LABELS[bomFilter.selectedNode.level] || `L${bomFilter.selectedNode.level}`})
+                  <button onClick={() => bomFilter.setSelectedEntryId(null)} className="hover:text-blue-900">×</button>
                 </span>
-              ))}
-
-              {selectedLevels.map(level => (
-                <span key={level} className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs">
-                  {LEVEL_LABELS[level] || `Level ${level}`}
-                  <button onClick={() => toggleLevel(level)} className="hover:text-green-900">×</button>
-                </span>
-              ))}
+              )}
 
               {!selectedCategories.includes('all') && selectedCategories.map(cat => (
                 <span key={cat} className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded text-xs">

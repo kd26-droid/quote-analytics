@@ -3,6 +3,8 @@ import { Card, CardContent } from '../../../ui/card';
 import type { AdditionalCostsBreakdown, BOMCostComparison, TopItemsAnalytics } from '../../../../types/quote.types';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import type { BOMDetailData, CostViewData, RecurringCost } from '../../../../services/api';
+import { useHierarchicalBOMFilter, BOM_LEVEL_LABELS } from '../../../../hooks/useHierarchicalBOMFilter';
+import HierarchicalBOMDropdown from '../../shared/HierarchicalBOMDropdown';
 
 interface BOMAdditionalCostsViewProps {
   additionalCosts: AdditionalCostsBreakdown;
@@ -40,13 +42,6 @@ interface BOMNode {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
 
-const LEVEL_LABELS: Record<number, string> = {
-  0: 'Main BOM',
-  1: 'Sub-BOM',
-  2: 'Sub-Sub-BOM',
-  3: 'L3-BOM',
-  4: 'L4-BOM',
-};
 
 export default function BOMAdditionalCostsView({
   bomDetailData,
@@ -62,9 +57,10 @@ export default function BOMAdditionalCostsView({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  // Filters
-  const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
-  const [selectedLevels, setSelectedLevels] = useState<number[]>([]);
+  // Hierarchical BOM Filter (matches Factwise behavior)
+  const bomFilter = useHierarchicalBOMFilter(bomDetailData);
+
+  // Other Filters
   const [selectedACTypes, setSelectedACTypes] = useState<string[]>(['all']);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -73,10 +69,8 @@ export default function BOMAdditionalCostsView({
   const [showDisplayOnly, setShowDisplayOnly] = useState(false); // Toggle to show is_calculated=false costs
   const [sortColumn, setSortColumn] = useState<string>('hierarchy');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [openDropdown, setOpenDropdown] = useState<'bom' | 'level' | 'acType' | 'columns' | null>(null);
-  const [bomSearch, setBomSearch] = useState('');
+  const [openDropdown, setOpenDropdown] = useState<'acType' | 'columns' | null>(null);
   const [acTypeSearch, setAcTypeSearch] = useState('');
-  const [expandedBOMs, setExpandedBOMs] = useState<Set<string>>(new Set());
 
   // Column visibility
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
@@ -149,8 +143,7 @@ export default function BOMAdditionalCostsView({
   // Reset filters from parent
   useEffect(() => {
     if (filterResetKey !== undefined && filterResetKey > 0) {
-      setSelectedBOMs(['all']);
-      setSelectedLevels([]);
+      bomFilter.setSelectedEntryId(null);
       setSelectedACTypes(['all']);
       setSearchQuery('');
       setCurrentPage(1);
@@ -160,7 +153,7 @@ export default function BOMAdditionalCostsView({
   // Reset page on filter change
   useEffect(() => {
     setCurrentPage(1);
-  }, [selectedBOMs, selectedLevels, selectedACTypes, searchQuery]);
+  }, [bomFilter.selectedEntryId, selectedACTypes, searchQuery]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -186,9 +179,6 @@ export default function BOMAdditionalCostsView({
     return newSelection;
   };
 
-  const toggleLevel = (level: number) => {
-    setSelectedLevels(prev => prev.includes(level) ? prev.filter(l => l !== level) : [...prev, level]);
-  };
 
   // Check if we have real API data
   const hasRealData = bomDetailData && bomDetailData.bom_instances && bomDetailData.bom_instances.length > 0;
@@ -301,12 +291,7 @@ export default function BOMAdditionalCostsView({
   // All AC types based on toggle
   const allACTypes = showDisplayOnly ? displayOnlyACTypes : includedACTypes;
 
-  // Available levels
-  const availableLevels = useMemo(() => {
-    return Array.from(new Set(allBOMNodes.map(n => n.level))).sort();
-  }, [allBOMNodes]);
-
-  // Filter nodes
+  // Filter nodes using hierarchical filter
   const filteredNodes = useMemo(() => {
     let nodes = [...allBOMNodes];
 
@@ -315,12 +300,9 @@ export default function BOMAdditionalCostsView({
       nodes = nodes.filter(n => n.code.toLowerCase().includes(q) || n.name.toLowerCase().includes(q));
     }
 
-    if (!selectedBOMs.includes('all')) {
-      nodes = nodes.filter(n => selectedBOMs.includes(n.code) || selectedBOMs.includes(n.parentBomCode));
-    }
-
-    if (selectedLevels.length > 0) {
-      nodes = nodes.filter(n => selectedLevels.includes(n.level));
+    // Hierarchical BOM filter - matches Factwise behavior
+    if (bomFilter.selectedEntryId) {
+      nodes = nodes.filter(node => bomFilter.isNodeVisibleByPath(node.path));
     }
 
     if (!selectedACTypes.includes('all')) {
@@ -328,7 +310,7 @@ export default function BOMAdditionalCostsView({
     }
 
     return nodes;
-  }, [allBOMNodes, searchQuery, selectedBOMs, selectedLevels, selectedACTypes]);
+  }, [allBOMNodes, searchQuery, bomFilter.selectedEntryId, bomFilter.isNodeVisibleByPath, selectedACTypes]);
 
   // Sort
   const sortedNodes = useMemo(() => {
@@ -408,11 +390,10 @@ export default function BOMAdditionalCostsView({
     return allBOMNodes.filter(n => filteredNodes.some(fn => fn.path === n.path)).slice(0, 10);
   }, [allBOMNodes, filteredNodes]);
 
-  const hasActiveFilters = !selectedBOMs.includes('all') || selectedLevels.length > 0 || !selectedACTypes.includes('all') || searchQuery.trim() !== '';
+  const hasActiveFilters = bomFilter.selectedEntryId !== null || !selectedACTypes.includes('all') || searchQuery.trim() !== '';
 
   const handleClearAllFilters = () => {
-    setSelectedBOMs(['all']);
-    setSelectedLevels([]);
+    bomFilter.setSelectedEntryId(null);
     setSelectedACTypes(['all']);
     setSearchQuery('');
     setCurrentPage(1);
@@ -435,12 +416,7 @@ export default function BOMAdditionalCostsView({
     return cost ? { calc: cost.calculated_amount, quoted: cost.quoted_amount } : null;
   };
 
-  // Filtered dropdown lists
-  const filteredBOMList = useMemo(() => {
-    const codes = [...new Set(bomTree.map(b => b.code))];
-    return bomSearch.trim() ? codes.filter(c => c.toLowerCase().includes(bomSearch.toLowerCase())) : codes;
-  }, [bomTree, bomSearch]);
-
+  // Filtered AC type list for dropdown
   const filteredACTypeList = useMemo(() => {
     return acTypeSearch.trim() ? allACTypes.filter(t => t.toLowerCase().includes(acTypeSearch.toLowerCase())) : allACTypes;
   }, [allACTypes, acTypeSearch]);
@@ -574,7 +550,7 @@ export default function BOMAdditionalCostsView({
                   <div key={node.path} className="cursor-pointer rounded-lg p-2 -mx-2 hover:bg-gray-50" onClick={() => navigateToTab('bom', { selectedBOM: node.path })}>
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${node.level === 0 ? 'bg-blue-100 text-blue-700' : node.level === 1 ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>
-                        {LEVEL_LABELS[node.level] || `L${node.level}`}
+                        {BOM_LEVEL_LABELS[node.level] || `L${node.level}`}
                       </span>
                       <span className="text-sm font-medium text-gray-900 truncate flex-1">{node.code}</span>
                       <span className="text-sm font-bold text-gray-700">{currencySymbol}{val.toLocaleString()}</span>
@@ -608,75 +584,13 @@ export default function BOMAdditionalCostsView({
               </svg>
             </div>
 
-            {/* BOM Filter */}
-            <div className="relative filter-dropdown">
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'bom' ? null : 'bom'); }}
-                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${!selectedBOMs.includes('all') ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
-              >
-                <span>BOM</span>
-                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">{selectedBOMs.includes('all') ? 'All' : selectedBOMs.length}</span>
-                <span className="text-gray-400">▼</span>
-              </button>
-              {openDropdown === 'bom' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-64">
-                  <div className="p-2 border-b">
-                    <input type="text" placeholder="Search..." value={bomSearch} onChange={(e) => setBomSearch(e.target.value)} className="w-full px-3 py-2 border rounded text-sm" onClick={(e) => e.stopPropagation()} />
-                  </div>
-                  <div className="px-2 py-2 border-b">
-                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
-                      <input type="checkbox" checked={selectedBOMs.includes('all')} onChange={() => setSelectedBOMs(['all'])} className="rounded" />
-                      <span className="text-sm font-medium">All BOMs</span>
-                    </label>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto py-1">
-                    {filteredBOMList.map(code => (
-                      <label key={code} className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-100 cursor-pointer ${selectedBOMs.includes(code) ? 'bg-blue-50' : ''}`}>
-                        <input type="checkbox" checked={selectedBOMs.includes(code)} onChange={() => setSelectedBOMs(toggleSelection(selectedBOMs, code))} className="rounded" />
-                        <span className="text-sm">{code}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t flex justify-between">
-                    <button onClick={() => setSelectedBOMs(['all'])} className="text-xs text-gray-600">Clear</button>
-                    <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded">Done</button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Level Filter */}
-            <div className="relative filter-dropdown">
-              <button
-                onClick={(e) => { e.stopPropagation(); setOpenDropdown(openDropdown === 'level' ? null : 'level'); }}
-                className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm font-medium ${selectedLevels.length > 0 ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'}`}
-              >
-                <span>Level</span>
-                <span className="text-xs bg-gray-200 px-1.5 py-0.5 rounded">{selectedLevels.length === 0 ? 'All' : selectedLevels.length}</span>
-                <span className="text-gray-400">▼</span>
-              </button>
-              {openDropdown === 'level' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-56">
-                  <div className="p-2">
-                    <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
-                      <input type="checkbox" checked={selectedLevels.length === 0} onChange={() => setSelectedLevels([])} className="rounded" />
-                      <span className="text-sm font-medium">All Levels</span>
-                    </label>
-                    {availableLevels.map(level => (
-                      <label key={level} className={`flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer ${selectedLevels.includes(level) ? 'bg-green-50' : ''}`}>
-                        <input type="checkbox" checked={selectedLevels.includes(level)} onChange={() => toggleLevel(level)} className="rounded" />
-                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${level === 0 ? 'bg-blue-100 text-blue-700' : level === 1 ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>
-                          {LEVEL_LABELS[level] || `L${level}`}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="p-2 border-t">
-                    <button onClick={() => setOpenDropdown(null)} className="w-full px-3 py-1.5 text-xs bg-blue-600 text-white rounded">Done</button>
-                  </div>
-                </div>
-              )}
-            </div>
+            {/* Hierarchical BOM Filter */}
+            <HierarchicalBOMDropdown
+              options={bomFilter.dropdownOptions}
+              selectedEntryId={bomFilter.selectedEntryId}
+              onSelect={bomFilter.setSelectedEntryId}
+              placeholder="Filter by BOM"
+            />
 
             {/* AC Type Filter */}
             <div className="relative filter-dropdown">
@@ -955,7 +869,7 @@ export default function BOMAdditionalCostsView({
                       </td>
                       <td className="px-3 py-2.5 border-r border-gray-200">
                         <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${node.level === 0 ? 'bg-blue-100 text-blue-700' : node.level === 1 ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>
-                          {LEVEL_LABELS[node.level] || `L${node.level}`}
+                          {BOM_LEVEL_LABELS[node.level] || `L${node.level}`}
                         </span>
                       </td>
                       <td className="px-3 py-2.5 text-right font-mono text-gray-700 border-r border-gray-200">

@@ -137,6 +137,40 @@ export default function SummaryTab({
     }));
   }, [costViewData, topCategories]);
 
+  // Unique vendor count from real API data
+  const uniqueVendorCount = useMemo(() => {
+    if (costViewData?.filters?.vendor_list) {
+      return costViewData.filters.vendor_list.length;
+    }
+    if (costViewData?.items) {
+      const vendorIds = new Set<string>();
+      costViewData.items.forEach(item => {
+        if (item.vendor_id) {
+          vendorIds.add(item.vendor_id);
+        }
+      });
+      return vendorIds.size;
+    }
+    return topVendors.length;
+  }, [costViewData, topVendors]);
+
+  // Unique category count from real API data
+  const uniqueCategoryCount = useMemo(() => {
+    if (costViewData?.filters?.tag_list) {
+      return costViewData.filters.tag_list.length;
+    }
+    if (costViewData?.items) {
+      const tags = new Set<string>();
+      costViewData.items.forEach(item => {
+        if (item.tags.length > 0) {
+          item.tags.forEach(tag => tags.add(tag));
+        }
+      });
+      return tags.size;
+    }
+    return topCategories.length;
+  }, [costViewData, topCategories]);
+
   // BOM breakdown from bomDetailData (same logic as BOMComparisonView)
   // Shows main BOMs (level 0) from each instance
   const bomBreakdown = useMemo(() => {
@@ -216,12 +250,15 @@ export default function SummaryTab({
 
     if (costViewData?.overall_additional_costs) {
       costViewData.overall_additional_costs.forEach(ac => {
+        // Handle both old format (calculated_amount/quoted_amount) and new format (cost_total)
+        const original = ac.calculated_amount ?? ac.cost_total ?? 0;
+        const agreed = ac.quoted_amount ?? ac.cost_total ?? 0;
         overallBreakdown.push({
           costName: ac.cost_name,
-          original: ac.calculated_amount,
-          agreed: ac.quoted_amount
+          original,
+          agreed
         });
-        overallLevelTotal += ac.quoted_amount;
+        overallLevelTotal += agreed;
       });
     }
 
@@ -260,11 +297,11 @@ export default function SummaryTab({
             </div>
             <div>
               <div className="text-sm text-gray-600 mb-1">Unique Vendors</div>
-              <div className="text-3xl font-bold text-gray-900">{topVendors.length}</div>
+              <div className="text-3xl font-bold text-gray-900">{uniqueVendorCount}</div>
             </div>
             <div>
               <div className="text-sm text-gray-600 mb-1">Categories</div>
-              <div className="text-3xl font-bold text-gray-900">{topCategories.length}</div>
+              <div className="text-3xl font-bold text-gray-900">{uniqueCategoryCount}</div>
             </div>
           </div>
         </CardContent>
@@ -609,11 +646,11 @@ export default function SummaryTab({
                       <div className="flex justify-between items-end mt-1">
                         <div>
                           <div className="text-xs text-gray-500">Original:</div>
-                          <div className="font-bold text-gray-700">{currencySymbol}{ac.original.toLocaleString()}</div>
+                          <div className="font-bold text-gray-700">{currencySymbol}{(ac.original ?? 0).toLocaleString()}</div>
                         </div>
                         <div className="text-right">
                           <div className="text-xs text-gray-500">Agreed:</div>
-                          <div className="font-bold text-gray-900">{currencySymbol}{ac.agreed.toLocaleString()}</div>
+                          <div className="font-bold text-gray-900">{currencySymbol}{(ac.agreed ?? 0).toLocaleString()}</div>
                         </div>
                       </div>
                     </div>
