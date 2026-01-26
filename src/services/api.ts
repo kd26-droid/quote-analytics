@@ -1,5 +1,13 @@
-// API Base URL - uses env variable in production, localhost for local dev
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+// API Base URL - reads from URL params (passed by Factwise iframe), falls back to env/localhost
+const getApiBaseUrl = (): string => {
+  if (typeof window !== 'undefined') {
+    const urlParams = new URLSearchParams(window.location.search);
+    const apiUrl = urlParams.get('api_url');
+    if (apiUrl) return apiUrl.replace(/\/$/, ''); // remove trailing slash
+  }
+  return (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+};
+const API_BASE_URL = getApiBaseUrl();
 
 // Header API Types
 export interface QuoteAnalyticsHeaderData {
