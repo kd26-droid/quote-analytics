@@ -1,10 +1,18 @@
-// API Base URL - reads from URL params (passed by Factwise iframe), falls back to env/localhost
+// API Base URL - reads from URL params (passed by Factwise), falls back to env/localhost
 const getApiBaseUrl = (): string => {
   if (typeof window !== 'undefined') {
     const urlParams = new URLSearchParams(window.location.search);
+
+    // Priority 1: Explicit api_url from Factwise
     const apiUrl = urlParams.get('api_url');
-    if (apiUrl) return apiUrl.replace(/\/$/, ''); // remove trailing slash
+    if (apiUrl) return apiUrl.replace(/\/$/, '');
+
+    // Priority 2: api_env param (prod/dev)
+    const apiEnv = urlParams.get('api_env');
+    if (apiEnv === 'prod') return 'https://qc9s5bz8d7.execute-api.us-east-1.amazonaws.com/prod';
+    if (apiEnv === 'dev') return 'https://poiigw0go0.execute-api.us-east-1.amazonaws.com/dev';
   }
+  // Priority 3: Build-time env or localhost
   return (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 };
 const API_BASE_URL = getApiBaseUrl();
