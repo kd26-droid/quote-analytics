@@ -1,16 +1,6 @@
 import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer
-} from 'recharts';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
@@ -25,12 +15,6 @@ interface ItemVolumeAnalysisViewProps {
   onClearAllFilters?: () => void;
 }
 
-// Color palette for charts
-const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899'];
-
-// Display mode for the view
-type DisplayMode = 'table' | 'chart';
-
 export default function ItemVolumeAnalysisView({
   costViewData,
   currencySymbol,
@@ -40,7 +24,9 @@ export default function ItemVolumeAnalysisView({
   filterResetKey,
   onClearAllFilters
 }: ItemVolumeAnalysisViewProps) {
-  const [displayMode, setDisplayMode] = useState<DisplayMode>('table');
+
+  // Hovered item in slope chart
+  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   // Column visibility - like CostView's "Views" dropdown
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
@@ -389,26 +375,31 @@ export default function ItemVolumeAnalysisView({
     if (onClearAllFilters) onClearAllFilters();
   };
 
-  // Chart data for selected items
-  const chartData = useMemo(() => {
-    const topItems = [...filteredData].slice(0, 8);
+  // Calculate slope data for each item (for slope chart)
+  const slopeChartData = useMemo(() => {
+    // Get items with volume scenarios, limit to 12 for readability
+    const topItems = [...filteredData].slice(0, 12);
 
-    return uniqueBOMInstances.map(inst => {
-      const dataPoint: Record<string, number | string> = {
-        name: `${inst.qty} units`,
-        qty: inst.qty
+    return topItems.map(item => {
+      const first = item.instances[0];
+      const last = item.instances[item.instances.length - 1];
+      const startPrice = getValue(first);
+      const endPrice = getValue(last);
+      const pctChange = startPrice > 0 ? ((endPrice - startPrice) / startPrice) * 100 : 0;
+      const isAnomaly = endPrice >= startPrice; // Price should decrease
+
+      return {
+        item_code: item.item_code,
+        item_name: item.item_name,
+        startPrice,
+        endPrice,
+        startQty: first.bom_instance_qty,
+        endQty: last.bom_instance_qty,
+        pctChange,
+        isAnomaly
       };
-
-      topItems.forEach(item => {
-        const instance = item.instances.find(i => i.bom_instance_id === inst.id);
-        if (instance) {
-          dataPoint[item.item_code] = getValue(instance);
-        }
-      });
-
-      return dataPoint;
     });
-  }, [filteredData, uniqueBOMInstances]);
+  }, [filteredData]);
 
   // No volume scenarios
   if (!hasVolumeScenarios || volumeAnalysisData.length === 0) {
@@ -452,7 +443,117 @@ export default function ItemVolumeAnalysisView({
         </Card>
       </div>
 
-      {/* Filters and Views */}
+      {/* SLOPE CHART - Price trend visualization */}
+      {slopeChartData.length > 0 && (
+        <Card className="border-gray-300">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h4 className="font-bold text-gray-900 text-sm">Price Trend: Low Volume → High Volume</h4>
+                <p className="text-xs text-gray-500">Lines should slope DOWN (price decreases at scale)</p>
+              </div>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-gray-400"></span>
+                  <span className="text-gray-600">Normal</span>
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-orange-500"></span>
+                  <span className="text-orange-600 font-medium">Anomaly</span>
+                </span>
+              </div>
+            </div>
+
+            <div className="relative">
+              {/* Column headers */}
+              <div className="flex justify-between mb-2 px-2">
+                <span className="text-xs font-semibold text-gray-600">
+                  {uniqueBOMInstances[0]?.qty || 1} units
+                </span>
+                <span className="text-xs font-semibold text-gray-600">
+                  {uniqueBOMInstances[uniqueBOMInstances.length - 1]?.qty || 100} units
+                </span>
+              </div>
+
+              {/* Slope lines */}
+              <div className="space-y-0">
+                {slopeChartData.map((item) => {
+                  const maxPrice = Math.max(...slopeChartData.map(d => Math.max(d.startPrice, d.endPrice)));
+                  const isHovered = hoveredItem === item.item_code;
+                  const isAnyHovered = hoveredItem !== null;
+                  const isBlurred = isAnyHovered && !isHovered;
+
+                  // Calculate Y positions (0-100%)
+                  const startY = maxPrice > 0 ? (1 - item.startPrice / maxPrice) * 100 : 50;
+                  const endY = maxPrice > 0 ? (1 - item.endPrice / maxPrice) * 100 : 50;
+
+                  return (
+                    <div
+                      key={item.item_code}
+                      className={`flex items-center relative h-9 cursor-pointer transition-all duration-150 ${isBlurred ? 'opacity-15' : 'opacity-100'} ${isHovered ? 'bg-blue-50 -mx-2 px-2 rounded' : ''}`}
+                      onMouseEnter={() => setHoveredItem(item.item_code)}
+                      onMouseLeave={() => setHoveredItem(null)}
+                    >
+                      {/* Item code label */}
+                      <div className="w-32 pr-2 text-right">
+                        <span className={`text-xs font-mono truncate transition-all ${isHovered ? 'font-bold' : ''} ${item.isAnomaly ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
+                          {item.item_code}
+                        </span>
+                      </div>
+
+                      {/* Slope line area */}
+                      <div className="flex-1 relative h-full">
+                        <svg className="w-full h-full" preserveAspectRatio="none">
+                          <line
+                            x1="0%"
+                            y1={`${startY}%`}
+                            x2="100%"
+                            y2={`${endY}%`}
+                            stroke={item.isAnomaly ? '#f97316' : '#9ca3af'}
+                            strokeWidth={isHovered ? 4 : (item.isAnomaly ? 2.5 : 1.5)}
+                            strokeLinecap="round"
+                            className="transition-all duration-200"
+                          />
+                          {/* Start dot */}
+                          <circle
+                            cx="0%"
+                            cy={`${startY}%`}
+                            r={isHovered ? 6 : 4}
+                            fill={item.isAnomaly ? '#f97316' : '#6b7280'}
+                            className="transition-all duration-200"
+                          />
+                          {/* End dot */}
+                          <circle
+                            cx="100%"
+                            cy={`${endY}%`}
+                            r={isHovered ? 6 : 4}
+                            fill={item.isAnomaly ? '#f97316' : '#6b7280'}
+                            className="transition-all duration-200"
+                          />
+                        </svg>
+                      </div>
+
+                      {/* % change label */}
+                      <div className="w-16 pl-2">
+                        <span className={`text-xs font-semibold ${item.isAnomaly ? 'text-orange-600' : 'text-green-600'}`}>
+                          {item.pctChange > 0 ? '+' : ''}{item.pctChange.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+            </div>
+
+            <p className="text-xs text-gray-400 mt-3 text-center">
+              Showing {slopeChartData.length} items • Hover a line to highlight in table
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Filters */}
       <Card className="border-gray-300">
         <CardContent className="p-4">
           <div className="flex items-center gap-4 flex-wrap">
@@ -705,47 +806,28 @@ export default function ItemVolumeAnalysisView({
                 Clear All
               </button>
             )}
-
-            <div className="h-6 w-px bg-gray-300 ml-auto" />
-
-            {/* Display Mode Toggle */}
-            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
-              <button
-                onClick={() => setDisplayMode('table')}
-                className={`px-3 py-1.5 text-xs font-medium rounded ${
-                  displayMode === 'table' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Table
-              </button>
-              <button
-                onClick={() => setDisplayMode('chart')}
-                className={`px-3 py-1.5 text-xs font-medium rounded ${
-                  displayMode === 'chart' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                Chart
-              </button>
-            </div>
           </div>
         </CardContent>
       </Card>
 
-      {/* TABLE VIEW */}
-      {displayMode === 'table' && (
-        <Card className="border-gray-300 shadow-sm">
+      {/* TABLE */}
+      <Card className={`border-gray-300 shadow-sm ${hoveredItem ? 'ring-2 ring-blue-300' : ''}`}>
           <CardContent className="p-0">
             <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
               <div>
                 <h4 className="font-bold text-gray-900 text-sm">
-                  Quoted Rate Comparison
+                  {hoveredItem ? (
+                    <span className="text-blue-600">Showing: {hoveredItem}</span>
+                  ) : (
+                    'Quoted Rate Comparison'
+                  )}
                 </h4>
                 <p className="text-xs text-gray-600 mt-0.5">
-                  Compare item rates across different BOM quantities
+                  {hoveredItem ? 'Hover away from chart to see all items' : 'Compare item rates across different BOM quantities'}
                 </p>
               </div>
               <div className="text-xs text-gray-600">
-                Showing {paginatedData.length} of {filteredData.length} items
+                {hoveredItem ? '1 item selected' : `Showing ${paginatedData.length} of ${filteredData.length} items`}
               </div>
             </div>
 
@@ -799,14 +881,24 @@ export default function ItemVolumeAnalysisView({
                         {inst.label} {renderSortIndicator(inst.id)}
                       </th>
                     ))}
+                    {/* % Change column */}
+                    <th className="px-4 py-3 text-right font-semibold text-gray-700" style={{ minWidth: '100px' }}>
+                      % Change
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedData.map((item, idx) => {
+                  {(hoveredItem
+                    ? filteredData.filter(item => item.item_code === hoveredItem)
+                    : paginatedData
+                  ).map((item, idx) => {
                     const lowestQtyValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
+                    const highestQtyValue = item.instances.length > 0 ? getValue(item.instances[item.instances.length - 1]) : 0;
+                    const pctChange = lowestQtyValue > 0 ? ((highestQtyValue - lowestQtyValue) / lowestQtyValue) * 100 : 0;
+                    const isItemAnomaly = pctChange >= 0;
 
                     return (
-                      <tr key={`${item.item_code}-${item.bom_path}`} className={`border-b border-gray-200 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                      <tr key={`${item.item_code}-${item.bom_path}`} className={`border-b border-gray-200 hover:bg-gray-50 ${hoveredItem ? 'bg-blue-50' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')}`}>
                         {visibleColumns.has('item_code') && (
                           <td className="px-4 py-3 font-mono text-blue-600 sticky left-0 bg-inherit z-10">
                             {item.item_code}
@@ -850,6 +942,11 @@ export default function ItemVolumeAnalysisView({
                             </td>
                           );
                         })}
+                        {/* % Change cell */}
+                        <td className={`px-4 py-3 text-right font-mono font-semibold ${isItemAnomaly ? 'text-orange-600 bg-orange-50' : 'text-green-600'}`}>
+                          {pctChange > 0 ? '+' : ''}{pctChange.toFixed(1)}%
+                          {isItemAnomaly && pctChange > 0 && <span className="ml-1">⚠</span>}
+                        </td>
                       </tr>
                     );
                   })}
@@ -896,49 +993,6 @@ export default function ItemVolumeAnalysisView({
             )}
           </CardContent>
         </Card>
-      )}
-
-      {/* CHART VIEW */}
-      {displayMode === 'chart' && (
-        <Card className="border-gray-300 shadow-sm">
-          <CardContent className="p-4">
-            <h4 className="font-bold text-gray-900 text-sm mb-4">
-              Quoted Rate Trend Across Volumes
-            </h4>
-            <div className="h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis tick={{ fontSize: 12 }} tickFormatter={(v) => `${currencySymbol}${v}`} />
-                  <Tooltip
-                    formatter={(value: number) => [`${currencySymbol}${value.toFixed(2)}`, '']}
-                    labelStyle={{ fontWeight: 'bold' }}
-                  />
-                  <Legend />
-                  {[...filteredData]
-                    .slice(0, 8)
-                    .map((item, idx) => (
-                      <Line
-                        key={item.item_code}
-                        type="monotone"
-                        dataKey={item.item_code}
-                        name={item.item_code}
-                        stroke={CHART_COLORS[idx % CHART_COLORS.length]}
-                        strokeWidth={2}
-                        dot={{ r: 4 }}
-                        activeDot={{ r: 6 }}
-                      />
-                    ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Showing first 8 items. Orange highlighted values indicate anomalies (price not decreasing at scale).
-            </p>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

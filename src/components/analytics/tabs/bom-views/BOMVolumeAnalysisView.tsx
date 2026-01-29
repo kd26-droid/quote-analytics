@@ -38,6 +38,9 @@ export default function BOMVolumeAnalysisView({
   filterResetKey,
   onClearAllFilters
 }: BOMVolumeAnalysisViewProps) {
+  // Hovered BOM in slope chart
+  const [hoveredBOM, setHoveredBOM] = useState<string | null>(null);
+
   // View selection
   const [selectedView, setSelectedView] = useState<BOMVolumeViewType>('per_unit_total');
 
@@ -347,6 +350,31 @@ export default function BOMVolumeAnalysisView({
     return { total: filteredData.length, cheaperAtScale, moreExpensive, unchanged };
   }, [filteredData, selectedView]);
 
+  // Slope chart data for visualization
+  const slopeChartData = useMemo(() => {
+    return filteredData.slice(0, 12).map(bom => {
+      const first = bom.instances[0];
+      const last = bom.instances[bom.instances.length - 1];
+      const startValue = getValue(first);
+      const endValue = getValue(last);
+      const pctChange = startValue > 0 ? ((endValue - startValue) / startValue) * 100 : 0;
+      // For per-unit metrics, price should DECREASE at higher volume
+      // For total_cost, it will naturally increase (more units = more total cost)
+      const isAnomaly = selectedView !== 'total_cost' ? pctChange >= 0 : false;
+
+      return {
+        bom_code: bom.bom_code,
+        bom_name: bom.bom_name,
+        startValue,
+        endValue,
+        startQty: first.bom_instance_qty,
+        endQty: last.bom_instance_qty,
+        pctChange,
+        isAnomaly
+      };
+    });
+  }, [filteredData, selectedView]);
+
   // No volume scenarios
   if (!hasVolumeScenarios || bomVolumeData.length === 0) {
     return (
@@ -417,6 +445,124 @@ export default function BOMVolumeAnalysisView({
           </CardContent>
         </Card>
       </div>
+
+      {/* SLOPE CHART - BOM cost trend visualization */}
+      {slopeChartData.length > 0 && (
+        <Card className="border-gray-300">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  {VIEW_OPTIONS.find(v => v.value === selectedView)?.label}: Low Volume → High Volume
+                </h4>
+                <p className="text-xs text-gray-500">
+                  {selectedView === 'total_cost'
+                    ? 'Total cost naturally increases with quantity'
+                    : 'Per-unit cost should decrease at higher volumes (economies of scale)'
+                  }
+                </p>
+              </div>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-4 h-0.5 bg-gray-400"></span>
+                  <span className="text-gray-600">Normal</span>
+                </span>
+                {selectedView !== 'total_cost' && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-4 h-0.5 bg-red-500"></span>
+                    <span className="text-red-600 font-medium">Anomaly</span>
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="relative">
+              {/* Column headers */}
+              <div className="flex justify-between mb-2 px-2">
+                <span className="text-xs font-semibold text-gray-600">
+                  {uniqueBOMInstances[0]?.qty || 1} units
+                </span>
+                <span className="text-xs font-semibold text-gray-600">
+                  {uniqueBOMInstances[uniqueBOMInstances.length - 1]?.qty || 100} units
+                </span>
+              </div>
+
+              {/* Slope lines */}
+              <div className="space-y-0">
+                {slopeChartData.map((bom) => {
+                  const maxValue = Math.max(...slopeChartData.map(d => Math.max(d.startValue, d.endValue)));
+                  const isHovered = hoveredBOM === bom.bom_code;
+                  const isAnyHovered = hoveredBOM !== null;
+                  const isBlurred = isAnyHovered && !isHovered;
+
+                  // Calculate Y positions (0-100%)
+                  const startY = maxValue > 0 ? (1 - bom.startValue / maxValue) * 100 : 50;
+                  const endY = maxValue > 0 ? (1 - bom.endValue / maxValue) * 100 : 50;
+
+                  return (
+                    <div
+                      key={bom.bom_code}
+                      className={`flex items-center relative h-9 cursor-pointer transition-all duration-150 ${isBlurred ? 'opacity-15' : 'opacity-100'} ${isHovered ? 'bg-blue-50 -mx-2 px-2 rounded' : ''}`}
+                      onMouseEnter={() => setHoveredBOM(bom.bom_code)}
+                      onMouseLeave={() => setHoveredBOM(null)}
+                    >
+                      {/* BOM code label */}
+                      <div className="w-32 pr-2 text-right">
+                        <span className={`text-xs font-mono truncate transition-all ${isHovered ? 'font-bold' : ''} ${bom.isAnomaly ? 'text-red-600 font-semibold' : 'text-gray-600'}`}>
+                          {bom.bom_code}
+                        </span>
+                      </div>
+
+                      {/* Slope line area */}
+                      <div className="flex-1 relative h-full">
+                        <svg className="w-full h-full" preserveAspectRatio="none">
+                          <line
+                            x1="0%"
+                            y1={`${startY}%`}
+                            x2="100%"
+                            y2={`${endY}%`}
+                            stroke={bom.isAnomaly ? '#ef4444' : '#9ca3af'}
+                            strokeWidth={isHovered ? 4 : (bom.isAnomaly ? 2.5 : 1.5)}
+                            strokeLinecap="round"
+                            className="transition-all duration-200"
+                          />
+                          {/* Start dot */}
+                          <circle
+                            cx="0%"
+                            cy={`${startY}%`}
+                            r={isHovered ? 6 : 4}
+                            fill={bom.isAnomaly ? '#ef4444' : '#6b7280'}
+                            className="transition-all duration-200"
+                          />
+                          {/* End dot */}
+                          <circle
+                            cx="100%"
+                            cy={`${endY}%`}
+                            r={isHovered ? 6 : 4}
+                            fill={bom.isAnomaly ? '#ef4444' : '#6b7280'}
+                            className="transition-all duration-200"
+                          />
+                        </svg>
+                      </div>
+
+                      {/* % change label */}
+                      <div className="w-16 pl-2">
+                        <span className={`text-xs font-semibold ${bom.isAnomaly ? 'text-red-600' : bom.pctChange < 0 ? 'text-green-600' : 'text-gray-600'}`}>
+                          {bom.pctChange > 0 ? '+' : ''}{bom.pctChange.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <p className="text-xs text-gray-400 mt-3 text-center">
+              Showing {slopeChartData.length} BOMs • Hover a line to highlight in table
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card className="border-gray-300">
@@ -561,19 +707,23 @@ export default function BOMVolumeAnalysisView({
       </Card>
 
       {/* Main Table */}
-      <Card className="border-gray-300 shadow-sm">
+      <Card className={`border-gray-300 shadow-sm ${hoveredBOM ? 'ring-2 ring-blue-300' : ''}`}>
         <CardContent className="p-0">
           <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
             <div>
               <h4 className="font-bold text-gray-900 text-sm">
-                {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison
+                {hoveredBOM ? (
+                  <span className="text-blue-600">Showing: {hoveredBOM}</span>
+                ) : (
+                  `${VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison`
+                )}
               </h4>
               <p className="text-xs text-gray-600 mt-0.5">
-                {VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
+                {hoveredBOM ? 'Hover away from chart to see all BOMs' : VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
               </p>
             </div>
             <div className="text-xs text-gray-600">
-              Showing {paginatedData.length} of {filteredData.length} BOMs
+              {hoveredBOM ? '1 BOM selected' : `Showing ${paginatedData.length} of ${filteredData.length} BOMs`}
             </div>
           </div>
 
@@ -615,12 +765,15 @@ export default function BOMVolumeAnalysisView({
                 </tr>
               </thead>
               <tbody>
-                {paginatedData.map((bom, idx) => {
+                {(hoveredBOM
+                  ? filteredData.filter(bom => bom.bom_code === hoveredBOM)
+                  : paginatedData
+                ).map((bom, idx) => {
                   const change = getChange(bom);
                   const firstValue = bom.instances.length > 0 ? getValue(bom.instances[0]) : 0;
 
                   return (
-                    <tr key={bom.bom_code} className={`border-b border-gray-200 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                    <tr key={bom.bom_code} className={`border-b border-gray-200 hover:bg-gray-50 ${hoveredBOM ? 'bg-blue-50' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')}`}>
                       <td className="px-4 py-3 font-mono text-blue-600 font-semibold sticky left-0 bg-inherit z-10">
                         <button
                           onClick={() => navigateToTab('bom', { selectedBOM: bom.bom_code })}
