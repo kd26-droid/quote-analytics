@@ -8,6 +8,7 @@ import type { ItemViewType } from '../ItemsTab';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 import BOMInstanceFilter, { BOMInstanceFilterPills, getBOMInstanceFilterText } from '../../shared/BOMInstanceFilter';
+import { AttributeTooltip } from '../../../ui/attribute-tooltip';
 
 interface CostViewProps {
   data: TopItemsAnalytics;
@@ -80,21 +81,6 @@ export default function CostView({
     'quantity', 'base_rate', 'quoted_rate', 'total_additional_cost', 'total_amount', 'percent_of_quote'
   ]));
 
-  // Column definitions
-  const columnDefs = [
-    { key: 'item_code', label: 'Item Code', align: 'left' },
-    { key: 'item_name', label: 'Item Name', align: 'left' },
-    { key: 'tags', label: 'Tags', align: 'left' },
-    { key: 'vendor_name', label: 'Vendor', align: 'left' },
-    { key: 'bom_path', label: 'BOM', align: 'left' },
-    { key: 'item_source', label: 'Source', align: 'center' },
-    { key: 'quantity', label: 'Qty', align: 'right' },
-    { key: 'base_rate', label: 'Base Rate', align: 'right' },
-    { key: 'quoted_rate', label: 'Quoted Rate', align: 'right' },
-    { key: 'total_additional_cost', label: 'Item AC', align: 'right' },
-    { key: 'total_amount', label: 'Total', align: 'right' },
-    { key: 'percent_of_quote', label: '% Quote', align: 'right' },
-  ];
 
   // Reset ALL local filters when filterResetKey changes (triggered by parent clearAllFilters)
   React.useEffect(() => {
@@ -133,6 +119,33 @@ export default function CostView({
   // Use real API data
   const items = costViewData.items;
   const filters = costViewData.filters;
+  const attributeList = filters.attribute_list || [];
+
+  // Column definitions - static + dynamic attribute columns
+  const columnDefs = useMemo(() => {
+    const staticCols = [
+      { key: 'item_code', label: 'Item Code', align: 'left' },
+      { key: 'item_name', label: 'Item Name', align: 'left' },
+      { key: 'tags', label: 'Tags', align: 'left' },
+      { key: 'vendor_name', label: 'Vendor', align: 'left' },
+      { key: 'bom_path', label: 'BOM', align: 'left' },
+      { key: 'item_source', label: 'Source', align: 'center' },
+      { key: 'quantity', label: 'Qty', align: 'right' },
+      { key: 'base_rate', label: 'Base Rate', align: 'right' },
+      { key: 'quoted_rate', label: 'Quoted Rate', align: 'right' },
+      { key: 'total_additional_cost', label: 'Item AC', align: 'right' },
+      { key: 'total_amount', label: 'Total', align: 'right' },
+      { key: 'percent_of_quote', label: '% Quote', align: 'right' },
+    ];
+
+    const attrCols = attributeList.map(specName => ({
+      key: `attr_${specName}`,
+      label: specName,
+      align: 'left' as const,
+    }));
+
+    return [...staticCols, ...attrCols];
+  }, [attributeList]);
 
   // Use shared BOM instances hook for volume scenario detection
   const { bomInstances, hasVolumeScenarios, filterByInstance } = useBOMInstances(items);
@@ -439,7 +452,7 @@ export default function CostView({
       result = result.filter(item => item.item_code === selectedItemCode);
     }
 
-    // Apply table search filter
+    // Apply table search filter (includes attributes like MPN)
     if (tableSearch.trim()) {
       const search = tableSearch.toLowerCase();
       result = result.filter(item =>
@@ -449,7 +462,8 @@ export default function CostView({
         item.bom_path.toLowerCase().includes(search) ||
         item.bom_code.toLowerCase().includes(search) ||
         item.tags.some(tag => tag.toLowerCase().includes(search)) ||
-        item.item_source.toLowerCase().includes(search)
+        item.item_source.toLowerCase().includes(search) ||
+        (item.attributes || []).some(attr => attr.spec_value.toLowerCase().includes(search))
       );
     }
 
@@ -478,6 +492,13 @@ export default function CostView({
       if (sortColumn === 'percent_of_quote') {
         aVal = totalQuoteValue > 0 ? a.total_amount / totalQuoteValue : 0;
         bVal = totalQuoteValue > 0 ? b.total_amount / totalQuoteValue : 0;
+      }
+
+      // Handle dynamic attribute columns
+      if (sortColumn.startsWith('attr_')) {
+        const specName = sortColumn.slice(5);
+        aVal = (a.attributes || []).find(attr => attr.spec_name === specName)?.spec_value || '';
+        bVal = (b.attributes || []).find(attr => attr.spec_name === specName)?.spec_value || '';
       }
 
       // Handle null/undefined
@@ -1017,7 +1038,7 @@ export default function CostView({
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="Search items..."
+                  placeholder="Search items, MPN..."
                   value={tableSearch}
                   onChange={(e) => setTableSearch(e.target.value)}
                   className="w-48 px-3 py-2 pl-8 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -1739,6 +1760,18 @@ export default function CostView({
                       % Quote {renderSortIndicator('percent_of_quote')}
                     </th>
                   )}
+                  {/* Dynamic attribute columns */}
+                  {attributeList.map(specName => (
+                    visibleColumns.has(`attr_${specName}`) && (
+                      <th
+                        key={`attr_${specName}`}
+                        className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
+                        onClick={() => handleSort(`attr_${specName}`)}
+                      >
+                        {specName} {renderSortIndicator(`attr_${specName}`)}
+                      </th>
+                    )
+                  ))}
                 </tr>
               </thead>
               <tbody className="bg-white">
@@ -1749,7 +1782,9 @@ export default function CostView({
                     </td>
                     {visibleColumns.has('item_code') && (
                       <td className="px-3 py-2.5 font-mono text-sm text-gray-900 border-r border-gray-200 font-medium">
-                        {item.item_code}
+                        <AttributeTooltip attributes={item.attributes}>
+                          {item.item_code}
+                        </AttributeTooltip>
                       </td>
                     )}
                     {visibleColumns.has('item_name') && (
@@ -1852,6 +1887,14 @@ export default function CostView({
                         {totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue).toFixed(2) : '0.00'}%
                       </td>
                     )}
+                    {/* Dynamic attribute cells */}
+                    {attributeList.map(specName => (
+                      visibleColumns.has(`attr_${specName}`) && (
+                        <td key={`attr_${specName}`} className="px-3 py-2.5 text-gray-900 border-l border-gray-200 text-sm">
+                          {(item.attributes || []).find(a => a.spec_name === specName)?.spec_value || '—'}
+                        </td>
+                      )
+                    ))}
                   </tr>
                 ))}
               </tbody>

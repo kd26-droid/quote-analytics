@@ -146,6 +146,7 @@ export interface CostViewItem {
   total_amount: number;
   percent_of_quote: number;
   item_source: 'PROJECT' | 'EVENT' | 'QUOTE';
+  attributes: Array<{ spec_name: string; spec_value: string }>;
 }
 
 // BOM Additional Cost
@@ -182,6 +183,7 @@ export interface CostViewFilters {
     vendor_name: string;
   }>;
   tag_list: string[];
+  attribute_list: string[];
 }
 
 // Complete Cost View Data

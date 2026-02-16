@@ -5,6 +5,7 @@ import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 import BOMInstanceFilter, { BOMInstanceFilterPills, getBOMInstanceFilterText } from '../../shared/BOMInstanceFilter';
+import { AttributeTooltip } from '../../../ui/attribute-tooltip';
 
 interface AdditionalCostsViewProps {
   data: TopItemsAnalytics;
@@ -1482,7 +1483,9 @@ export default function AdditionalCostsView({
                       {/* Base columns */}
                       {visibleColumns.has('item_code') && (
                         <td className="px-3 py-2.5 border-r border-gray-200">
-                          <span className="font-mono font-medium text-gray-900">{item.item_code}</span>
+                          <AttributeTooltip attributes={item.attributes}>
+                            <span className="font-mono font-medium text-gray-900">{item.item_code}</span>
+                          </AttributeTooltip>
                         </td>
                       )}
 

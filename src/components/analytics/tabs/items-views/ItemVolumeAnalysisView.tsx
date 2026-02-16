@@ -4,6 +4,7 @@ import { Card, CardContent } from '../../../ui/card';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
+import { AttributeTooltip } from '../../../ui/attribute-tooltip';
 
 interface ItemVolumeAnalysisViewProps {
   costViewData: CostViewData;
@@ -25,8 +26,8 @@ export default function ItemVolumeAnalysisView({
   onClearAllFilters
 }: ItemVolumeAnalysisViewProps) {
 
-  // Hovered item in slope chart
-  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+  // Hovered item in dot strip (only affects the strip, not the table)
+  const [hoveredDot, setHoveredDot] = useState<string | null>(null);
 
   // Column visibility - like CostView's "Views" dropdown
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
@@ -79,6 +80,17 @@ export default function ItemVolumeAnalysisView({
 
   // Use shared BOM instances hook
   const { bomInstances, hasVolumeScenarios } = useBOMInstances(items);
+
+  // Build a lookup map for item attributes (volume data items don't carry attributes directly)
+  const attributesByItemCode = useMemo(() => {
+    const map = new Map<string, Array<{ spec_name: string; spec_value: string }>>();
+    items.forEach(item => {
+      if (item.attributes && item.attributes.length > 0 && !map.has(item.item_code)) {
+        map.set(item.item_code, item.attributes);
+      }
+    });
+    return map;
+  }, [items]);
 
   // Close dropdown when clicking outside
   React.useEffect(() => {
@@ -443,115 +455,107 @@ export default function ItemVolumeAnalysisView({
         </Card>
       </div>
 
-      {/* SLOPE CHART - Price trend visualization */}
-      {slopeChartData.length > 0 && (
-        <Card className="border-gray-300">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between mb-3">
-              <div>
-                <h4 className="font-bold text-gray-900 text-sm">Price Trend: Low Volume → High Volume</h4>
-                <p className="text-xs text-gray-500">Lines should slope DOWN (price decreases at scale)</p>
-              </div>
-              <div className="flex items-center gap-4 text-xs">
-                <span className="flex items-center gap-1.5">
-                  <span className="w-4 h-0.5 bg-gray-400"></span>
-                  <span className="text-gray-600">Normal</span>
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="w-4 h-0.5 bg-orange-500"></span>
-                  <span className="text-orange-600 font-medium">Anomaly</span>
-                </span>
-              </div>
-            </div>
+      {/* DOT STRIP - % Change anomaly detection */}
+      {slopeChartData.length > 0 && (() => {
+        const changes = slopeChartData.map(d => d.pctChange);
+        const minChange = Math.min(...changes, -1);
+        const maxChange = Math.max(...changes, 1);
+        // Pad range slightly so edge dots aren't clipped
+        const rangePad = (maxChange - minChange) * 0.08 || 2;
+        const rangeMin = minChange - rangePad;
+        const rangeMax = maxChange + rangePad;
+        // Position of 0% on the axis
+        const zeroPos = ((0 - rangeMin) / (rangeMax - rangeMin)) * 100;
 
-            <div className="relative">
-              {/* Column headers */}
-              <div className="flex justify-between mb-2 px-2">
-                <span className="text-xs font-semibold text-gray-600">
-                  {uniqueBOMInstances[0]?.qty || 1} units
-                </span>
-                <span className="text-xs font-semibold text-gray-600">
-                  {uniqueBOMInstances[uniqueBOMInstances.length - 1]?.qty || 100} units
-                </span>
+        return (
+          <Card className="border-gray-300">
+            <CardContent className="px-6 py-4">
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="font-bold text-gray-900 text-sm">Price Change: Low → High Volume</h4>
+                <div className="flex items-center gap-4 text-xs">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+                    <span className="text-gray-600">Price decreased</span>
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block"></span>
+                    <span className="text-orange-600 font-medium">Anomaly</span>
+                  </span>
+                </div>
               </div>
 
-              {/* Slope lines */}
-              <div className="space-y-0">
+              {/* The strip */}
+              <div className="relative h-16 mt-2">
+                {/* Background track */}
+                <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-[2px] bg-gray-200 rounded-full" />
+
+                {/* Zero line */}
+                <div
+                  className="absolute top-0 bottom-0 w-[1.5px] bg-gray-400"
+                  style={{ left: `${zeroPos}%` }}
+                />
+                <span
+                  className="absolute -bottom-1 text-[10px] font-semibold text-gray-500 -translate-x-1/2"
+                  style={{ left: `${zeroPos}%` }}
+                >
+                  0%
+                </span>
+
+                {/* Dots */}
                 {slopeChartData.map((item) => {
-                  const maxPrice = Math.max(...slopeChartData.map(d => Math.max(d.startPrice, d.endPrice)));
-                  const isHovered = hoveredItem === item.item_code;
-                  const isAnyHovered = hoveredItem !== null;
-                  const isBlurred = isAnyHovered && !isHovered;
-
-                  // Calculate Y positions (0-100%)
-                  const startY = maxPrice > 0 ? (1 - item.startPrice / maxPrice) * 100 : 50;
-                  const endY = maxPrice > 0 ? (1 - item.endPrice / maxPrice) * 100 : 50;
+                  const xPos = ((item.pctChange - rangeMin) / (rangeMax - rangeMin)) * 100;
+                  const isHovered = hoveredDot === item.item_code;
+                  const isAnyHovered = hoveredDot !== null;
 
                   return (
                     <div
                       key={item.item_code}
-                      className={`flex items-center relative h-9 cursor-pointer transition-all duration-150 ${isBlurred ? 'opacity-15' : 'opacity-100'} ${isHovered ? 'bg-blue-50 -mx-2 px-2 rounded' : ''}`}
-                      onMouseEnter={() => setHoveredItem(item.item_code)}
-                      onMouseLeave={() => setHoveredItem(null)}
+                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 cursor-pointer transition-all duration-150 p-2"
+                      style={{
+                        left: `${xPos}%`,
+                        zIndex: isHovered ? 20 : item.isAnomaly ? 10 : 1,
+                        opacity: isAnyHovered && !isHovered ? 0.2 : 1,
+                      }}
+                      onMouseEnter={() => setHoveredDot(item.item_code)}
+                      onMouseLeave={() => setHoveredDot(null)}
                     >
-                      {/* Item code label */}
-                      <div className="w-32 pr-2 text-right">
-                        <span className={`text-xs font-mono truncate transition-all ${isHovered ? 'font-bold' : ''} ${item.isAnomaly ? 'text-orange-600 font-semibold' : 'text-gray-600'}`}>
-                          {item.item_code}
-                        </span>
-                      </div>
-
-                      {/* Slope line area */}
-                      <div className="flex-1 relative h-full">
-                        <svg className="w-full h-full" preserveAspectRatio="none">
-                          <line
-                            x1="0%"
-                            y1={`${startY}%`}
-                            x2="100%"
-                            y2={`${endY}%`}
-                            stroke={item.isAnomaly ? '#f97316' : '#9ca3af'}
-                            strokeWidth={isHovered ? 4 : (item.isAnomaly ? 2.5 : 1.5)}
-                            strokeLinecap="round"
-                            className="transition-all duration-200"
-                          />
-                          {/* Start dot */}
-                          <circle
-                            cx="0%"
-                            cy={`${startY}%`}
-                            r={isHovered ? 6 : 4}
-                            fill={item.isAnomaly ? '#f97316' : '#6b7280'}
-                            className="transition-all duration-200"
-                          />
-                          {/* End dot */}
-                          <circle
-                            cx="100%"
-                            cy={`${endY}%`}
-                            r={isHovered ? 6 : 4}
-                            fill={item.isAnomaly ? '#f97316' : '#6b7280'}
-                            className="transition-all duration-200"
-                          />
-                        </svg>
-                      </div>
-
-                      {/* % change label */}
-                      <div className="w-16 pl-2">
-                        <span className={`text-xs font-semibold ${item.isAnomaly ? 'text-orange-600' : 'text-green-600'}`}>
-                          {item.pctChange > 0 ? '+' : ''}{item.pctChange.toFixed(1)}%
-                        </span>
-                      </div>
+                      <div
+                        className={`rounded-full transition-all duration-150 ${
+                          item.isAnomaly
+                            ? `bg-orange-500 ${isHovered ? 'w-5 h-5 ring-4 ring-orange-100' : 'w-3.5 h-3.5 ring-2 ring-orange-100'}`
+                            : `bg-emerald-500 ${isHovered ? 'w-5 h-5 ring-4 ring-emerald-100' : 'w-3 h-3'}`
+                        }`}
+                      />
+                      {/* Tooltip on hover */}
+                      {isHovered && (
+                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-lg pointer-events-none">
+                          <div className="font-bold">{item.item_code}</div>
+                          <div className="text-gray-300 truncate max-w-[180px]">{item.item_name}</div>
+                          <div className="mt-1 font-mono">
+                            <span className={item.isAnomaly ? 'text-orange-300' : 'text-emerald-300'}>
+                              {item.pctChange > 0 ? '+' : ''}{item.pctChange.toFixed(1)}%
+                            </span>
+                            <span className="text-gray-400 ml-2">
+                              {currencySymbol}{item.startPrice.toFixed(2)} → {currencySymbol}{item.endPrice.toFixed(2)}
+                            </span>
+                          </div>
+                          <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900" />
+                        </div>
+                      )}
                     </div>
                   );
                 })}
               </div>
 
-            </div>
-
-            <p className="text-xs text-gray-400 mt-3 text-center">
-              Showing {slopeChartData.length} items • Hover a line to highlight in table
-            </p>
-          </CardContent>
-        </Card>
-      )}
+              {/* Axis labels */}
+              <div className="flex justify-between mt-1 text-[10px] text-gray-400">
+                <span>{minChange.toFixed(0)}%</span>
+                <span>{maxChange > 0 ? `+${maxChange.toFixed(0)}` : maxChange.toFixed(0)}%</span>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Filters */}
       <Card className="border-gray-300">
@@ -811,23 +815,15 @@ export default function ItemVolumeAnalysisView({
       </Card>
 
       {/* TABLE */}
-      <Card className={`border-gray-300 shadow-sm ${hoveredItem ? 'ring-2 ring-blue-300' : ''}`}>
+      <Card className="border-gray-300 shadow-sm">
           <CardContent className="p-0">
             <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-gray-900 text-sm">
-                  {hoveredItem ? (
-                    <span className="text-blue-600">Showing: {hoveredItem}</span>
-                  ) : (
-                    'Quoted Rate Comparison'
-                  )}
-                </h4>
-                <p className="text-xs text-gray-600 mt-0.5">
-                  {hoveredItem ? 'Hover away from chart to see all items' : 'Compare item rates across different BOM quantities'}
-                </p>
+                <h4 className="font-bold text-gray-900 text-sm">Quoted Rate Comparison</h4>
+                <p className="text-xs text-gray-600 mt-0.5">Compare item rates across different BOM quantities</p>
               </div>
               <div className="text-xs text-gray-600">
-                {hoveredItem ? '1 item selected' : `Showing ${paginatedData.length} of ${filteredData.length} items`}
+                Showing {paginatedData.length} of {filteredData.length} items
               </div>
             </div>
 
@@ -888,20 +884,24 @@ export default function ItemVolumeAnalysisView({
                   </tr>
                 </thead>
                 <tbody>
-                  {(hoveredItem
-                    ? filteredData.filter(item => item.item_code === hoveredItem)
-                    : paginatedData
-                  ).map((item, idx) => {
+                  {paginatedData.map((item, idx) => {
                     const lowestQtyValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
                     const highestQtyValue = item.instances.length > 0 ? getValue(item.instances[item.instances.length - 1]) : 0;
                     const pctChange = lowestQtyValue > 0 ? ((highestQtyValue - lowestQtyValue) / lowestQtyValue) * 100 : 0;
                     const isItemAnomaly = pctChange >= 0;
 
                     return (
-                      <tr key={`${item.item_code}-${item.bom_path}`} className={`border-b border-gray-200 hover:bg-gray-50 ${hoveredItem ? 'bg-blue-50' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')}`}>
+                      <tr
+                        key={`${item.item_code}-${item.bom_path}`}
+                        className={`border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150 ${
+                          hoveredDot === item.item_code ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')
+                        }`}
+                      >
                         {visibleColumns.has('item_code') && (
                           <td className="px-4 py-3 font-mono text-blue-600 sticky left-0 bg-inherit z-10">
-                            {item.item_code}
+                            <AttributeTooltip attributes={attributesByItemCode.get(item.item_code)}>
+                              {item.item_code}
+                            </AttributeTooltip>
                           </td>
                         )}
                         {visibleColumns.has('item_name') && (

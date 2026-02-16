@@ -6,6 +6,7 @@ import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import type { CostViewData } from '../../../../services/api';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 import BOMInstanceFilter, { BOMInstanceFilterPills, getBOMInstanceFilterText } from '../../shared/BOMInstanceFilter';
+import { AttributeTooltip } from '../../../ui/attribute-tooltip';
 
 interface CategoryViewProps {
   data: TopItemsAnalytics;
@@ -1318,7 +1319,11 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
                       <td className="px-3 py-2 text-gray-600 border-r border-gray-200 text-sm">{(currentPage - 1) * pageSize + idx + 1}</td>
 
                       {visibleItemColumns.has('item_code') && (
-                        <td className="px-3 py-2 font-mono text-sm text-gray-900 border-r border-gray-200 font-medium">{item.item_code}</td>
+                        <td className="px-3 py-2 font-mono text-sm text-gray-900 border-r border-gray-200 font-medium">
+                          <AttributeTooltip attributes={item.attributes}>
+                            {item.item_code}
+                          </AttributeTooltip>
+                        </td>
                       )}
 
                       {visibleItemColumns.has('item_name') && (

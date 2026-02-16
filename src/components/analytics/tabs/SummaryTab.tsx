@@ -3,6 +3,7 @@ import { Card, CardContent } from '../../ui/card';
 import type { TopItemsAnalytics, Category, Vendor } from '../../../types/quote.types';
 import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
 import type { CostViewData, BOMDetailData } from '../../../services/api';
+import { AttributeTooltip } from '../../ui/attribute-tooltip';
 
 interface SummaryTabProps {
   data: TopItemsAnalytics;
@@ -41,12 +42,13 @@ export default function SummaryTab({
         .map(item => ({
           itemCode: item.item_code,
           itemName: item.item_name,
-          cost: item.total_item_cost - item.total_additional_cost, // Base cost without AC
+          cost: item.base_rate * item.quantity, // Base cost = base_rate × quantity (before AC)
           additionalCost: item.total_additional_cost,
-          totalCost: item.total_amount, // Use total_amount same as CostView
-          percent: totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue) * 100 : 0, // Same formula as CostView
+          totalCost: item.total_amount,
+          percent: totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue) * 100 : 0,
           vendor: item.vendor_name || 'Unknown',
-          category: item.tags?.[0] || 'Uncategorized'
+          category: item.tags?.[0] || 'Uncategorized',
+          attributes: item.attributes
         }));
     }
     // Fallback to old data if costViewData not available
@@ -58,7 +60,8 @@ export default function SummaryTab({
       totalCost: item.totalCost,
       percent: totalQuoteValue > 0 ? (item.totalCost / totalQuoteValue) * 100 : 0,
       vendor: item.vendor,
-      category: item.category || 'Uncategorized'
+      category: item.category || 'Uncategorized',
+      attributes: undefined as Array<{ spec_name: string; spec_value: string }> | undefined
     }));
   }, [costViewData, data.overall, totalQuoteValue]);
 
@@ -342,7 +345,11 @@ export default function SummaryTab({
                     onClick={() => navigateToTab('items', { selectedItem: item.itemCode })}
                   >
                     <td className="px-3 py-2.5 text-gray-600">{idx + 1}</td>
-                    <td className="px-3 py-2.5 font-mono text-gray-900 font-medium">{item.itemCode}</td>
+                    <td className="px-3 py-2.5 font-mono text-gray-900 font-medium">
+                      <AttributeTooltip attributes={item.attributes}>
+                        {item.itemCode}
+                      </AttributeTooltip>
+                    </td>
                     <td className="px-3 py-2.5 text-gray-700 max-w-xs truncate" title={item.itemName}>{item.itemName}</td>
                     <td className="px-3 py-2.5 text-gray-700">{item.vendor}</td>
                     <td className="px-3 py-2.5 text-gray-700">{item.category}</td>
