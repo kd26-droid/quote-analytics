@@ -119,7 +119,19 @@ export default function CostView({
   // Use real API data
   const items = costViewData.items;
   const filters = costViewData.filters;
-  const attributeList = filters.attribute_list || [];
+  // Build attribute list: use API filter list + scan items for any missing spec names
+  const attributeList = useMemo(() => {
+    const fromFilter = new Set((filters.attribute_list || []).map(s => s));
+    const fromItems = new Set<string>();
+    items.forEach(item => {
+      (item.attributes || []).forEach(attr => {
+        if (attr.spec_name && !Array.from(fromFilter).some(f => f.toLowerCase() === attr.spec_name.toLowerCase())) {
+          fromItems.add(attr.spec_name);
+        }
+      });
+    });
+    return [...Array.from(fromFilter), ...Array.from(fromItems)];
+  }, [filters.attribute_list, items]);
 
   // Column definitions - static + dynamic attribute columns
   const columnDefs = useMemo(() => {
@@ -497,8 +509,8 @@ export default function CostView({
       // Handle dynamic attribute columns
       if (sortColumn.startsWith('attr_')) {
         const specName = sortColumn.slice(5);
-        aVal = (a.attributes || []).find(attr => attr.spec_name === specName)?.spec_value || '';
-        bVal = (b.attributes || []).find(attr => attr.spec_name === specName)?.spec_value || '';
+        aVal = (a.attributes || []).find(attr => attr.spec_name.toLowerCase() === specName.toLowerCase())?.spec_value || '';
+        bVal = (b.attributes || []).find(attr => attr.spec_name.toLowerCase() === specName.toLowerCase())?.spec_value || '';
       }
 
       // Handle null/undefined
@@ -1916,7 +1928,7 @@ export default function CostView({
                     {attributeList.map(specName => (
                       visibleColumns.has(`attr_${specName}`) && (
                         <td key={`attr_${specName}`} className="px-3 py-2.5 text-gray-900 border-l border-gray-200 text-sm">
-                          {(item.attributes || []).find(a => a.spec_name === specName)?.spec_value || '—'}
+                          {(item.attributes || []).find(a => a.spec_name.toLowerCase() === specName.toLowerCase())?.spec_value || '—'}
                         </td>
                       )
                     ))}
