@@ -690,16 +690,15 @@ export default function CostView({
     );
   };
 
-  // Additional costs display helper - show top 5 on hover, click for full view
+  // Additional costs display helper - show calculated costs on hover, click for full view
   // isNearBottom: for last 4 rows, show dropdown above to prevent cutoff
   const renderAdditionalCosts = (item: CostViewItem, isNearBottom: boolean = false) => {
     if (item.additional_costs.length === 0) {
       return <span className="text-gray-700 text-sm">-</span>;
     }
 
-    const maxToShow = 5;
-    const costsToShow = item.additional_costs.slice(0, maxToShow);
-    const remainingCount = item.additional_costs.length - maxToShow;
+    const calculatedCosts = item.additional_costs.filter(ac => ac.is_calculated);
+    const inputCosts = item.additional_costs.filter(ac => !ac.is_calculated);
 
     return (
       <div className="relative group">
@@ -715,24 +714,50 @@ export default function CostView({
         >
           {currencySymbol}{item.total_additional_cost.toLocaleString()}
         </button>
-        <div className={`absolute z-20 hidden group-hover:block bg-white border border-gray-300 rounded shadow-xl right-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`} style={{ minWidth: '240px' }}>
+        <div className={`absolute z-20 hidden group-hover:block bg-white border border-gray-300 rounded shadow-xl right-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`} style={{ minWidth: '280px' }}>
           <div className="bg-gray-100 px-3 py-2 border-b border-gray-300 text-sm font-bold text-gray-800">
-            Item Additional Costs ({item.additional_costs.length})
+            Additional Costs ({calculatedCosts.length} included{inputCosts.length > 0 ? `, ${inputCosts.length} input` : ''})
           </div>
-          <table className="w-full text-sm">
-            <tbody>
-              {costsToShow.map((ac, idx) => (
-                <tr key={idx} className="border-b border-gray-100 last:border-0">
-                  <td className="px-3 py-2 text-gray-800">{ac.cost_name}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-900">{currencySymbol}{ac.total_amount.toLocaleString()}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {remainingCount > 0 && (
-            <div className="px-3 py-2 text-sm text-blue-600 border-b border-gray-200">
-              +{remainingCount} more (click to view all)
-            </div>
+          {/* Calculated costs — included in total */}
+          {calculatedCosts.length > 0 && (
+            <table className="w-full text-sm">
+              <tbody>
+                {calculatedCosts.map((ac, idx) => (
+                  <tr key={idx} className="border-b border-gray-100 last:border-0" title={ac.formula || undefined}>
+                    <td className="px-3 py-1.5 text-gray-800">
+                      {ac.cost_name}
+                      {ac.cost_source === 'FORMULA' && <span className="text-[10px] text-purple-500 ml-1">fx</span>}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs text-gray-500">
+                      {ac.per_unit_amount.toLocaleString()}/u
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono text-gray-900">
+                      {currencySymbol}{ac.total_amount.toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {/* Input/reference costs — not in total */}
+          {inputCosts.length > 0 && (
+            <>
+              <div className="px-3 py-1 text-[10px] font-semibold text-gray-400 bg-gray-50 border-t border-gray-200 uppercase tracking-wider">
+                Inputs / Reference
+              </div>
+              <table className="w-full text-sm">
+                <tbody>
+                  {inputCosts.map((ac, idx) => (
+                    <tr key={idx} className="border-b border-gray-100 last:border-0 text-gray-400">
+                      <td className="px-3 py-1.5">{ac.cost_name}</td>
+                      <td colSpan={2} className="px-3 py-1.5 text-right font-mono">
+                        {ac.cost_type === 'PERCENTAGE' ? `${ac.cost_value}%` : `${currencySymbol}${ac.cost_value.toLocaleString()}`}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
           )}
           <div className="bg-gray-50 px-3 py-2 border-t border-gray-300 flex justify-between text-sm font-bold">
             <span>Total</span>

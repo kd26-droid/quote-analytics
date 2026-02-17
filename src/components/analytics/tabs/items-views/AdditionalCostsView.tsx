@@ -660,12 +660,20 @@ export default function AdditionalCostsView({
   // Get AC value for an item by cost name
   const getACValue = (item: CostViewItem, costName: string) => {
     const ac = item.additional_costs.find(a => a.cost_name === costName);
-    return ac ? { total: ac.total_amount, perUnit: ac.per_unit_amount, type: ac.cost_type } : null;
+    if (!ac) return null;
+    return {
+      total: ac.total_amount,
+      perUnit: ac.per_unit_amount,
+      type: ac.cost_type,
+      isCalculated: ac.is_calculated,
+      costValue: ac.cost_value,
+      formula: ac.formula,
+      source: ac.cost_source,
+    };
   };
 
   // Get AC metadata for tooltip (aggregated from all items that have this AC type)
   const getACMetadata = (costName: string) => {
-    // Find first item with this AC type to get metadata
     for (const item of items) {
       const ac = item.additional_costs.find(a => a.cost_name === costName);
       if (ac) {
@@ -675,7 +683,9 @@ export default function AdditionalCostsView({
                   ac.cost_source === 'VENDOR' ? 'Vendor' :
                   ac.cost_source === 'ITEM' ? 'Item' : 'Default',
           allocation: ac.allocation_type === 'PER_UNIT' ? 'Per Unit' :
-                      ac.allocation_type === 'OVERALL_QUANTITY' ? 'Overall Quantity' : 'N/A'
+                      ac.allocation_type === 'OVERALL_QUANTITY' ? 'Overall Quantity' : 'N/A',
+          isCalculated: ac.is_calculated,
+          formula: ac.formula,
         };
       }
     }
@@ -1432,20 +1442,29 @@ export default function AdditionalCostsView({
                   {/* Dynamic AC Type columns */}
                   {allACTypes.map(acType => {
                     const metadata = getACMetadata(acType);
-                    const tooltipText = metadata
-                      ? `${acType}\n━━━━━━━━━━━━━━━━━━\nType: ${metadata.costType}\nSource: ${metadata.source}\nAllocation: ${metadata.allocation}\n\n(Click to filter)`
-                      : `${acType}\n(Click to filter)`;
+                    const tooltipParts = [acType, '━━━━━━━━━━━━━━━━━━'];
+                    if (metadata) {
+                      tooltipParts.push(`Type: ${metadata.costType}`);
+                      tooltipParts.push(`Source: ${metadata.source}`);
+                      tooltipParts.push(`Allocation: ${metadata.allocation}`);
+                      tooltipParts.push(`Included in total: ${metadata.isCalculated ? 'Yes' : 'No (input/reference)'}`);
+                      if (metadata.formula) tooltipParts.push(`Formula: ${metadata.formula}`);
+                    }
+                    tooltipParts.push('', '(Click to filter)');
+                    const tooltipText = tooltipParts.join('\n');
+                    const isInput = metadata && !metadata.isCalculated;
 
                     return (
                       <th
                         key={acType}
-                        className={`px-3 py-2.5 font-bold text-orange-700 border-r border-gray-300 text-right cursor-pointer hover:bg-orange-50 whitespace-nowrap ${
+                        className={`px-3 py-2.5 font-bold border-r border-gray-300 text-right cursor-pointer hover:bg-orange-50 whitespace-nowrap ${
                           selectedACTypes.includes(acType) && !selectedACTypes.includes('all') ? 'bg-orange-100' : ''
-                        }`}
+                        } ${isInput ? 'text-gray-400' : 'text-orange-700'}`}
                         onClick={() => setSelectedACTypes(toggleSelection(selectedACTypes, acType))}
                         title={tooltipText}
                       >
                         {acType}
+                        {isInput && <span className="text-[9px] ml-1 text-gray-400">(input)</span>}
                       </th>
                     );
                   })}
@@ -1552,8 +1571,11 @@ export default function AdditionalCostsView({
                       {/* Dynamic AC Type columns */}
                       {allACTypes.map(acType => {
                         const acValue = getACValue(item, acType);
+                        const isInput = acValue && !acValue.isCalculated;
                         const displayValue = acValue
-                          ? (acDisplayMode === 'per_unit' ? acValue.perUnit : acValue.total)
+                          ? isInput
+                            ? (acValue.type === 'PERCENTAGE' ? `${acValue.costValue}%` : `${currencySymbol}${acValue.costValue.toLocaleString()}`)
+                            : `${currencySymbol}${(acDisplayMode === 'per_unit' ? acValue.perUnit : acValue.total).toLocaleString()}`
                           : null;
 
                         return (
@@ -1562,10 +1584,12 @@ export default function AdditionalCostsView({
                             className={`px-3 py-2.5 text-right border-r border-gray-200 ${
                               selectedACTypes.includes(acType) && !selectedACTypes.includes('all') ? 'bg-orange-50' : ''
                             }`}
+                            title={acValue?.formula || undefined}
                           >
                             {displayValue !== null ? (
-                              <span className="font-mono text-orange-600 font-semibold text-sm">
-                                {currencySymbol}{displayValue.toLocaleString()}
+                              <span className={`font-mono text-sm ${isInput ? 'text-gray-400' : 'text-orange-600 font-semibold'}`}>
+                                {displayValue}
+                                {acValue?.source === 'FORMULA' && <span className="text-[10px] text-purple-400 ml-0.5">fx</span>}
                               </span>
                             ) : (
                               <span className="text-gray-300">-</span>

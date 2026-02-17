@@ -115,6 +115,9 @@ export interface AdditionalCost {
   cost_type: 'ABSOLUTE_VALUE' | 'PERCENTAGE';
   allocation_type: 'PER_UNIT' | 'OVERALL_QUANTITY' | null;
   cost_source: 'FORMULA' | 'DEFAULT' | 'ITEM' | 'VENDOR';
+  is_calculated: boolean;
+  formula: string | null;
+  cost_value: number;
   total_amount: number;
   per_unit_amount: number;
 }
@@ -492,6 +495,22 @@ export interface ProjectDeltaBOMInstance {
   items: ProjectDeltaBOMItem[];
 }
 
+export interface ProjectDeltaQuoteOnlyItem {
+  costing_sheet_item_id: string;
+  enterprise_item_id: string;
+  item_code: string;
+  item_name: string;
+  quantity: number;
+}
+
+export interface ProjectDeltaQuoteOnlyBOM {
+  bom_code: string;
+  bom_name: string;
+  quote_bom_entry_id: string;
+  quantity: number;
+  items_count: number;
+}
+
 export interface ProjectDeltaOverallSummary {
   total_project_standalone_items: number;
   total_project_bom_items: number;
@@ -504,6 +523,8 @@ export interface ProjectDeltaOverallSummary {
   bom_items_matched: number;
   bom_items_missing: number;
   bom_items_qty_changed: number;
+  quote_only_items_count?: number;
+  quote_only_boms_count?: number;
 }
 
 export interface ProjectDeltaData {
@@ -516,6 +537,14 @@ export interface ProjectDeltaData {
   bom_instances: {
     summary: { project_count: number; matched: number; not_in_quote: number };
     instances: ProjectDeltaBOMInstance[];
+  };
+  quote_only_items?: {
+    count: number;
+    items: ProjectDeltaQuoteOnlyItem[];
+  };
+  quote_only_boms?: {
+    count: number;
+    boms: ProjectDeltaQuoteOnlyBOM[];
   };
   overall_summary: ProjectDeltaOverallSummary;
 }
@@ -583,5 +612,7 @@ export type {
   ProjectDeltaStandaloneItem,
   ProjectDeltaBOMItem,
   ProjectDeltaBOMInstance,
-  ProjectDeltaOverallSummary
+  ProjectDeltaOverallSummary,
+  ProjectDeltaQuoteOnlyItem,
+  ProjectDeltaQuoteOnlyBOM
 };
