@@ -119,6 +119,10 @@ export default function CostView({
   // Use real API data
   const items = costViewData.items;
   const filters = costViewData.filters;
+
+  // DEBUG: log attribute data from API
+  console.log('[CostView] attribute_list from API:', filters.attribute_list);
+  console.log('[CostView] First 3 items attributes:', items.slice(0, 3).map(i => ({ code: i.item_code, attrs: i.attributes })));
   // Build attribute list: use API filter list + scan items for any missing spec names
   const attributeList = useMemo(() => {
     const fromFilter = new Set((filters.attribute_list || []).map(s => s));

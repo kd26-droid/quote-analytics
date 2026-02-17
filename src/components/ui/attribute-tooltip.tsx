@@ -16,6 +16,7 @@ export function AttributeTooltip({ attributes, children }: AttributeTooltipProps
   const specs = attributes || [];
 
   const handleEnter = useCallback(() => {
+    console.log('[AttributeTooltip] HOVER — attributes:', JSON.stringify(attributes), 'specs.length:', specs.length);
     if (!ref.current) return;
     const rect = ref.current.getBoundingClientRect();
     const above = window.innerHeight - rect.bottom < 200;
@@ -24,9 +25,10 @@ export function AttributeTooltip({ attributes, children }: AttributeTooltipProps
       y: above ? rect.top : rect.bottom,
       above,
     });
-  }, []);
+  }, [attributes, specs.length]);
 
   if (specs.length === 0) {
+    console.log('[AttributeTooltip] SKIPPED — empty attributes:', JSON.stringify(attributes));
     return <>{children}</>;
   }
 
