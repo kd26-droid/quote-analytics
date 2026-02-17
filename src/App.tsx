@@ -5,13 +5,15 @@ import {
   fetchQuoteAnalyticsHeader,
   fetchCostViewData,
   fetchBOMDetailData,
-  fetchOverallACData
+  fetchOverallACData,
+  fetchProjectDelta
 } from './services/api';
 import type {
   QuoteAnalyticsHeaderData,
   CostViewData,
   BOMDetailData,
-  OverallACData
+  OverallACData,
+  ProjectDeltaData
 } from './services/api';
 
 function App() {
@@ -19,6 +21,7 @@ function App() {
   const [costViewData, setCostViewData] = useState<CostViewData | null>(null);
   const [bomDetailData, setBomDetailData] = useState<BOMDetailData | null>(null);
   const [overallACData, setOverallACData] = useState<OverallACData | null>(null);
+  const [projectDeltaData, setProjectDeltaData] = useState<ProjectDeltaData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,6 +67,15 @@ function App() {
         } catch (overallErr) {
           console.warn('Overall AC API not available:', overallErr);
           setOverallACData(null);
+        }
+
+        // Try to load Project Delta data (optional - null for manual quotes)
+        try {
+          const deltaResponse = await fetchProjectDelta(costingSheetId, token);
+          setProjectDeltaData(deltaResponse);
+        } catch (deltaErr) {
+          console.warn('Project Delta API not available:', deltaErr);
+          setProjectDeltaData(null);
         }
       } catch (err: any) {
         console.error('Failed to load quote analytics data:', err);
@@ -207,6 +219,7 @@ function App() {
           costViewData={costViewData}
           bomDetailData={bomDetailData}
           overallACData={overallACData}
+          projectDeltaData={projectDeltaData}
           totalQuoteValue={costViewData.summary.grand_total}
           totalItems={costViewData.summary.total_costing_sheet_items}
           topCategories={analyticsData.topCategories}

@@ -1,10 +1,13 @@
 import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 import { AttributeTooltip } from '../../../ui/attribute-tooltip';
+
+const ITEM_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#06b6d4', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#e11d48', '#a855f7', '#65a30d'];
 
 interface ItemVolumeAnalysisViewProps {
   costViewData: CostViewData;
@@ -26,8 +29,9 @@ export default function ItemVolumeAnalysisView({
   onClearAllFilters
 }: ItemVolumeAnalysisViewProps) {
 
-  // Hovered item in dot strip (only affects the strip, not the table)
+  // Hovered item — set by chart dot/line hover, filters the table
   const [hoveredDot, setHoveredDot] = useState<string | null>(null);
+  const chartContainerRef = React.useRef<HTMLDivElement>(null);
 
   // Column visibility - like CostView's "Views" dropdown
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
@@ -387,31 +391,93 @@ export default function ItemVolumeAnalysisView({
     if (onClearAllFilters) onClearAllFilters();
   };
 
-  // Calculate slope data for each item (for slope chart)
-  const slopeChartData = useMemo(() => {
-    // Get items with volume scenarios, limit to 12 for readability
-    const topItems = [...filteredData].slice(0, 12);
+  // Build line chart data — volume (X) vs price (Y) with per-segment coloring
+  const lineChartData = useMemo(() => {
+    const volumeLevels = uniqueBOMInstances.map(i => i.qty);
+    const chartItems = filteredData.slice(0, 15);
 
-    return topItems.map(item => {
-      const first = item.instances[0];
-      const last = item.instances[item.instances.length - 1];
-      const startPrice = getValue(first);
-      const endPrice = getValue(last);
-      const pctChange = startPrice > 0 ? ((endPrice - startPrice) / startPrice) * 100 : 0;
-      const isAnomaly = endPrice >= startPrice; // Price should decrease
+    // One entry per volume level
+    const data = volumeLevels.map(vol => {
+      const entry: Record<string, any> = { volume: vol };
 
-      return {
-        item_code: item.item_code,
-        item_name: item.item_name,
-        startPrice,
-        endPrice,
-        startQty: first.bom_instance_qty,
-        endQty: last.bom_instance_qty,
-        pctChange,
-        isAnomaly
-      };
+      chartItems.forEach((item, idx) => {
+        // Main key — used for dots
+        const inst = item.instances.find(i => i.bom_instance_qty === vol);
+        if (inst) {
+          entry[`item_${idx}`] = getValue(inst);
+        }
+
+        // Segment keys — only at the 2 endpoints of each segment
+        for (let s = 0; s < item.instances.length - 1; s++) {
+          const startInst = item.instances[s];
+          const endInst = item.instances[s + 1];
+          if (vol === startInst.bom_instance_qty || vol === endInst.bom_instance_qty) {
+            const instAtVol = item.instances.find(i => i.bom_instance_qty === vol);
+            if (instAtVol) {
+              entry[`item_${idx}_seg${s}`] = getValue(instAtVol);
+            }
+          }
+        }
+      });
+
+      return entry;
     });
-  }, [filteredData]);
+
+    // Segment metadata per item
+    const itemMeta = chartItems.map((item, idx) => ({
+      idx,
+      item_code: item.item_code,
+      item_name: item.item_name,
+      dotKey: `item_${idx}`,
+      segments: item.instances.slice(0, -1).map((inst, s) => {
+        const nextInst = item.instances[s + 1];
+        const currentPrice = getValue(inst);
+        const nextPrice = getValue(nextInst);
+        const isAnomaly = nextPrice > currentPrice;
+        return {
+          key: `item_${idx}_seg${s}`,
+          isAnomaly,
+          color: isAnomaly ? '#ef4444' : '#10b981',
+        };
+      })
+    }));
+
+    return { data, itemMeta };
+  }, [filteredData, uniqueBOMInstances]);
+
+  // Native SVG event listener — detect hover on line segments (paths)
+  React.useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+
+    const onOver = (e: MouseEvent) => {
+      const target = e.target as Element;
+      // Hovering a path (line segment)
+      if (target.tagName === 'path' && target.classList.contains('recharts-curve')) {
+        const lineGroup = target.closest('[class*="seg-"]');
+        if (lineGroup) {
+          const cls = lineGroup.getAttribute('class') || '';
+          const match = cls.match(/seg-(\d+)/);
+          if (match) {
+            const idx = parseInt(match[1]);
+            const meta = lineChartData.itemMeta[idx];
+            if (meta) { setHoveredDot(meta.item_code); return; }
+          }
+        }
+      }
+      // Don't clear if hovering a circle (activeDot handles those)
+      if (target.tagName === 'circle') return;
+    };
+
+    const onLeave = () => setHoveredDot(null);
+
+    el.addEventListener('mouseover', onOver);
+    el.addEventListener('mouseleave', onLeave);
+    return () => {
+      el.removeEventListener('mouseover', onOver);
+      el.removeEventListener('mouseleave', onLeave);
+    };
+  }, [lineChartData.itemMeta]);
 
   // No volume scenarios
   if (!hasVolumeScenarios || volumeAnalysisData.length === 0) {
@@ -455,107 +521,160 @@ export default function ItemVolumeAnalysisView({
         </Card>
       </div>
 
-      {/* DOT STRIP - % Change anomaly detection */}
-      {slopeChartData.length > 0 && (() => {
-        const changes = slopeChartData.map(d => d.pctChange);
-        const minChange = Math.min(...changes, -1);
-        const maxChange = Math.max(...changes, 1);
-        // Pad range slightly so edge dots aren't clipped
-        const rangePad = (maxChange - minChange) * 0.08 || 2;
-        const rangeMin = minChange - rangePad;
-        const rangeMax = maxChange + rangePad;
-        // Position of 0% on the axis
-        const zeroPos = ((0 - rangeMin) / (rangeMax - rangeMin)) * 100;
-
-        return (
-          <Card className="border-gray-300">
-            <CardContent className="px-6 py-4">
-              <div className="flex items-center justify-between mb-1">
-                <h4 className="font-bold text-gray-900 text-sm">Price Change: Low → High Volume</h4>
-                <div className="flex items-center gap-4 text-xs">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
-                    <span className="text-gray-600">Price decreased</span>
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block"></span>
-                    <span className="text-orange-600 font-medium">Anomaly</span>
-                  </span>
-                </div>
-              </div>
-
-              {/* The strip */}
-              <div className="relative h-16 mt-2">
-                {/* Background track */}
-                <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-[2px] bg-gray-200 rounded-full" />
-
-                {/* Zero line */}
-                <div
-                  className="absolute top-0 bottom-0 w-[1.5px] bg-gray-400"
-                  style={{ left: `${zeroPos}%` }}
-                />
-                <span
-                  className="absolute -bottom-1 text-[10px] font-semibold text-gray-500 -translate-x-1/2"
-                  style={{ left: `${zeroPos}%` }}
-                >
-                  0%
+      {/* Volume vs Price Line Chart */}
+      {lineChartData.data.length > 0 && (
+        <Card className="border-gray-300">
+          <CardContent className="px-6 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-bold text-gray-900 text-sm">Volume vs Price</h4>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-6 h-[2px] bg-emerald-500 inline-block"></span>
+                  <span className="text-gray-600">Price decreased</span>
                 </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-6 h-[2px] bg-red-500 inline-block"></span>
+                  <span className="text-red-600 font-medium">Anomaly (price increased)</span>
+                </span>
+              </div>
+            </div>
 
-                {/* Dots */}
-                {slopeChartData.map((item) => {
-                  const xPos = ((item.pctChange - rangeMin) / (rangeMax - rangeMin)) * 100;
-                  const isHovered = hoveredDot === item.item_code;
-                  const isAnyHovered = hoveredDot !== null;
+            <div className="max-w-4xl mx-auto" ref={chartContainerRef}>
+              <ResponsiveContainer width="100%" height={380}>
+                <LineChart data={lineChartData.data} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis
+                    dataKey="volume"
+                    type="category"
+                    tick={{ fontSize: 12, fill: '#374151' }}
+                    tickFormatter={(val) => Number(val).toLocaleString()}
+                    label={{ value: 'Volume (units)', position: 'insideBottom', offset: -10, fontSize: 12, fill: '#6b7280' }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#374151' }}
+                    tickFormatter={(val) => `${currencySymbol}${Number(val).toLocaleString()}`}
+                    width={70}
+                  />
+                  <Tooltip content={() => null} />
 
-                  return (
-                    <div
-                      key={item.item_code}
-                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 cursor-pointer transition-all duration-150 p-2"
-                      style={{
-                        left: `${xPos}%`,
-                        zIndex: isHovered ? 20 : item.isAnomaly ? 10 : 1,
-                        opacity: isAnyHovered && !isHovered ? 0.2 : 1,
-                      }}
-                      onMouseEnter={() => setHoveredDot(item.item_code)}
-                      onMouseLeave={() => setHoveredDot(null)}
-                    >
-                      <div
-                        className={`rounded-full transition-all duration-150 ${
-                          item.isAnomaly
-                            ? `bg-orange-500 ${isHovered ? 'w-5 h-5 ring-4 ring-orange-100' : 'w-3.5 h-3.5 ring-2 ring-orange-100'}`
-                            : `bg-emerald-500 ${isHovered ? 'w-5 h-5 ring-4 ring-emerald-100' : 'w-3 h-3'}`
-                        }`}
+                  {lineChartData.itemMeta.map((item) => (
+                    <React.Fragment key={item.dotKey}>
+                      <Line
+                        type="linear"
+                        dataKey={item.dotKey}
+                        stroke="transparent"
+                        strokeWidth={0}
+                        dot={{
+                          fill: ITEM_COLORS[item.idx % ITEM_COLORS.length],
+                          r: 6,
+                          strokeWidth: 2,
+                          stroke: '#fff'
+                        }}
+                        activeDot={(props: any) => (
+                          <circle
+                            cx={props.cx}
+                            cy={props.cy}
+                            r={8}
+                            fill="#fff"
+                            stroke={ITEM_COLORS[item.idx % ITEM_COLORS.length]}
+                            strokeWidth={3}
+                            onMouseEnter={() => setHoveredDot(item.item_code)}
+                            onMouseLeave={() => setHoveredDot(null)}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        )}
+                        isAnimationActive={false}
+                        name={item.item_code}
                       />
-                      {/* Tooltip on hover */}
-                      {isHovered && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-lg pointer-events-none">
-                          <div className="font-bold">{item.item_code}</div>
-                          <div className="text-gray-300 truncate max-w-[180px]">{item.item_name}</div>
-                          <div className="mt-1 font-mono">
-                            <span className={item.isAnomaly ? 'text-orange-300' : 'text-emerald-300'}>
-                              {item.pctChange > 0 ? '+' : ''}{item.pctChange.toFixed(1)}%
-                            </span>
-                            <span className="text-gray-400 ml-2">
-                              {currencySymbol}{item.startPrice.toFixed(2)} → {currencySymbol}{item.endPrice.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900" />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
 
-              {/* Axis labels */}
-              <div className="flex justify-between mt-1 text-[10px] text-gray-400">
-                <span>{minChange.toFixed(0)}%</span>
-                <span>{maxChange > 0 ? `+${maxChange.toFixed(0)}` : maxChange.toFixed(0)}%</span>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })()}
+                      {item.segments.map((seg) => (
+                        <Line
+                          key={seg.key}
+                          type="linear"
+                          dataKey={seg.key}
+                          stroke={seg.color}
+                          strokeWidth={4}
+                          dot={false}
+                          activeDot={false}
+                          isAnimationActive={false}
+                          legendType="none"
+                          name=""
+                          className={`seg-${item.idx}`}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Item legend */}
+            <div className="flex flex-wrap justify-center gap-x-5 gap-y-1.5 mt-2">
+              {lineChartData.itemMeta.map((item) => {
+                const itemHasAnomaly = item.segments.some(s => s.isAnomaly);
+                return (
+                  <div
+                    key={item.idx}
+                    className={`flex items-center gap-1.5 text-xs cursor-pointer rounded px-2 py-1 transition-colors ${
+                      hoveredDot === item.item_code ? 'bg-blue-50 font-bold' : 'hover:bg-gray-50'
+                    }`}
+                    onMouseEnter={() => setHoveredDot(item.item_code)}
+                    onMouseLeave={() => setHoveredDot(null)}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full inline-block flex-shrink-0"
+                      style={{ backgroundColor: ITEM_COLORS[item.idx % ITEM_COLORS.length] }}
+                    />
+                    <span className="text-gray-700 font-mono">{item.item_code}</span>
+                    {itemHasAnomaly && <span className="text-red-500 ml-0.5">!</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Hovered item detail panel */}
+            {hoveredDot && (() => {
+              const meta = lineChartData.itemMeta.find(m => m.item_code === hoveredDot);
+              const item = filteredData.find(d => d.item_code === hoveredDot);
+              if (!meta || !item) return null;
+
+              const first = item.instances[0];
+              const last = item.instances[item.instances.length - 1];
+              const pctChange = getValue(first) > 0 ? ((getValue(last) - getValue(first)) / getValue(first)) * 100 : 0;
+              const itemHasAnomaly = meta.segments.some(s => s.isAnomaly);
+
+              return (
+                <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: ITEM_COLORS[meta.idx % ITEM_COLORS.length] }} />
+                    <span className="font-mono font-bold text-gray-900 text-sm">{item.item_code}</span>
+                    <span className="text-gray-600 text-xs truncate max-w-[200px]">{item.item_name}</span>
+                    {item.vendor_name && <span className="text-gray-400 text-xs">| {item.vendor_name}</span>}
+                    <span className={`ml-auto font-mono font-semibold text-sm ${pctChange > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {pctChange > 0 ? '+' : ''}{pctChange.toFixed(1)}%
+                      {itemHasAnomaly && <span className="ml-1 text-red-500">!</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-6">
+                    {item.instances.map((inst, i) => {
+                      const isAnomaly = i > 0 && getValue(inst) > getValue(item.instances[i - 1]);
+                      return (
+                        <div key={i} className="text-center">
+                          <div className="text-[10px] text-gray-500 mb-0.5">{inst.bom_instance_qty.toLocaleString()} units</div>
+                          <div className={`font-mono font-semibold text-sm ${isAnomaly ? 'text-red-600' : 'text-gray-900'}`}>
+                            {currencySymbol}{getValue(inst).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card className="border-gray-300">
@@ -815,15 +934,33 @@ export default function ItemVolumeAnalysisView({
       </Card>
 
       {/* TABLE */}
-      <Card className="border-gray-300 shadow-sm">
+      {(() => {
+        // When hovering a chart item, filter table to just that item
+        const tableData = hoveredDot
+          ? sortedData.filter(item => item.item_code === hoveredDot)
+          : paginatedData;
+
+        return (
+      <Card className={`border-gray-300 shadow-sm transition-all duration-150 ${hoveredDot ? 'ring-2 ring-blue-200' : ''}`}>
           <CardContent className="p-0">
             <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
               <div>
-                <h4 className="font-bold text-gray-900 text-sm">Quoted Rate Comparison</h4>
-                <p className="text-xs text-gray-600 mt-0.5">Compare item rates across different BOM quantities</p>
+                <h4 className="font-bold text-gray-900 text-sm">
+                  {hoveredDot ? (
+                    <span>Quoted Rate — <span className="text-blue-600">{hoveredDot}</span></span>
+                  ) : (
+                    'Quoted Rate Comparison'
+                  )}
+                </h4>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  {hoveredDot ? 'Hover on chart to filter' : 'Compare item rates across different BOM quantities'}
+                </p>
               </div>
               <div className="text-xs text-gray-600">
-                Showing {paginatedData.length} of {filteredData.length} items
+                {hoveredDot
+                  ? <span className="text-blue-600 font-medium">Filtered by chart hover</span>
+                  : `Showing ${paginatedData.length} of ${filteredData.length} items`
+                }
               </div>
             </div>
 
@@ -884,7 +1021,7 @@ export default function ItemVolumeAnalysisView({
                   </tr>
                 </thead>
                 <tbody>
-                  {paginatedData.map((item, idx) => {
+                  {tableData.map((item, idx) => {
                     const lowestQtyValue = item.instances.length > 0 ? getValue(item.instances[0]) : 0;
                     const highestQtyValue = item.instances.length > 0 ? getValue(item.instances[item.instances.length - 1]) : 0;
                     const pctChange = lowestQtyValue > 0 ? ((highestQtyValue - lowestQtyValue) / lowestQtyValue) * 100 : 0;
@@ -894,7 +1031,7 @@ export default function ItemVolumeAnalysisView({
                       <tr
                         key={`${item.item_code}-${item.bom_path}`}
                         className={`border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150 ${
-                          hoveredDot === item.item_code ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')
+                          hoveredDot === item.item_code ? 'bg-blue-50' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')
                         }`}
                       >
                         {visibleColumns.has('item_code') && (
@@ -954,8 +1091,8 @@ export default function ItemVolumeAnalysisView({
               </table>
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {/* Pagination — hidden when chart hover is filtering */}
+            {!hoveredDot && totalPages > 1 && (
               <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-gray-600">Rows per page:</span>
@@ -993,6 +1130,8 @@ export default function ItemVolumeAnalysisView({
             )}
           </CardContent>
         </Card>
+        );
+      })()}
     </div>
   );
 }

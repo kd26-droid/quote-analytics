@@ -449,6 +449,114 @@ export const fetchOverallACData = async (
   return data.data;
 };
 
+// ============ Project Delta API Types ============
+
+export interface ProjectDeltaStandaloneItem {
+  project_item_id: string;
+  enterprise_item_id: string;
+  item_code: string;
+  item_name: string;
+  project_quantity: number;
+  quote_quantity: number | null;
+  status: 'MATCHED' | 'QTY_CHANGED' | 'NOT_IN_QUOTE';
+  match_path: 'DIRECT' | 'EVENT' | null;
+}
+
+export interface ProjectDeltaBOMItem {
+  item_code: string | null;
+  item_name: string | null;
+  enterprise_item_id: string | null;
+  bom_path: string;
+  bom_level: 'MAIN' | 'SUB' | 'SUB_SUB';
+  sub_bom_code: string | null;
+  project_quantity: number;
+  quote_quantity: number | null;
+  status: 'MATCHED' | 'QTY_CHANGED' | 'NOT_IN_QUOTE';
+  is_sub_bom_ref: boolean;
+}
+
+export interface ProjectDeltaBOMInstance {
+  bom_code: string;
+  bom_name: string;
+  project_bom_entry_id: string;
+  quote_bom_entry_id: string | null;
+  project_quantity: number;
+  quote_quantity: number | null;
+  status: 'MATCHED' | 'QTY_CHANGED' | 'NOT_IN_QUOTE';
+  items_summary: {
+    project_count: number;
+    matched: number;
+    not_in_quote: number;
+    qty_changed: number;
+  };
+  items: ProjectDeltaBOMItem[];
+}
+
+export interface ProjectDeltaOverallSummary {
+  total_project_standalone_items: number;
+  total_project_bom_items: number;
+  total_project_bom_instances: number;
+  standalone_matched: number;
+  standalone_missing: number;
+  standalone_qty_changed: number;
+  bom_instances_matched: number;
+  bom_instances_missing: number;
+  bom_items_matched: number;
+  bom_items_missing: number;
+  bom_items_qty_changed: number;
+}
+
+export interface ProjectDeltaData {
+  project: { project_id: string; project_code: string; project_name: string };
+  quote: { costing_sheet_id: string; quote_name: string };
+  standalone_items: {
+    summary: { project_count: number; matched: number; not_in_quote: number; qty_changed: number };
+    items: ProjectDeltaStandaloneItem[];
+  };
+  bom_instances: {
+    summary: { project_count: number; matched: number; not_in_quote: number };
+    instances: ProjectDeltaBOMInstance[];
+  };
+  overall_summary: ProjectDeltaOverallSummary;
+}
+
+// Fetch Project Delta Data
+export const fetchProjectDelta = async (
+  costingSheetId: string,
+  token: string
+): Promise<ProjectDeltaData | null> => {
+  const response = await fetch(
+    `${API_BASE_URL}/quotes/${costingSheetId}/analytics/project-delta/`,
+    {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => null);
+    // NO_PROJECT is expected for manual quotes — return null gracefully
+    if (errorData?.error?.code === 'NO_PROJECT') {
+      return null;
+    }
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const data = await response.json();
+
+  if (!data.success) {
+    if (data.error?.code === 'NO_PROJECT') {
+      return null;
+    }
+    throw new Error(data.error?.message || 'Failed to fetch project delta data');
+  }
+
+  return data.data;
+};
+
 // Explicit type exports for better module resolution
 export type {
   CostViewData,
@@ -470,5 +578,10 @@ export type {
   OverallACAllCosts,
   OverallACCostsSection,
   OverallACGrandTotal,
-  CostTypeReference
+  CostTypeReference,
+  ProjectDeltaData,
+  ProjectDeltaStandaloneItem,
+  ProjectDeltaBOMItem,
+  ProjectDeltaBOMInstance,
+  ProjectDeltaOverallSummary
 };

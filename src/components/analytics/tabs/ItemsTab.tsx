@@ -8,16 +8,18 @@ import RateView from './items-views/RateView';
 import AdditionalCostsView from './items-views/AdditionalCostsView';
 import CustomView from './items-views/CustomView';
 import ItemVolumeAnalysisView from './items-views/ItemVolumeAnalysisView';
+import ProjectDeltaView from './items-views/ProjectDeltaView';
 import { useBOMInstances } from '../../../hooks/useBOMInstances';
 import type { TopItemsAnalytics, Category, Vendor, VendorRateDeviation, BOMCostComparison } from '../../../types/quote.types';
 import type { NavigationContext, TabType } from '../QuoteAnalyticsDashboard';
-import type { CostViewData } from '../../../services/api';
+import type { CostViewData, ProjectDeltaData } from '../../../services/api';
 
-export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'volume-analysis' | 'custom';
+export type ItemViewType = 'cost' | 'vendor' | 'category' | 'rate' | 'additional-costs' | 'volume-analysis' | 'project-delta' | 'custom';
 
 interface ItemsTabProps {
   data: TopItemsAnalytics;
   costViewData?: CostViewData;
+  projectDeltaData?: ProjectDeltaData | null;
   currencySymbol?: string;
   totalQuoteValue: number;
   totalItems: number;
@@ -34,6 +36,7 @@ interface ItemsTabProps {
 export default function ItemsTab({
   data,
   costViewData,
+  projectDeltaData,
   currencySymbol = '₹',
   totalQuoteValue,
   totalItems,
@@ -61,12 +64,13 @@ export default function ItemsTab({
       ? [{ id: 'volume-analysis' as ItemViewType, label: 'Volume Analysis', icon: '📈' }]
       : []
     ),
+    { id: 'project-delta' as ItemViewType, label: 'Project Delta', icon: '🔄' },
     { id: 'custom' as ItemViewType, label: 'Custom View', icon: '⚙️' }
   ];
 
   // Handle navigation context to switch views automatically
   React.useEffect(() => {
-    const validViews: ItemViewType[] = ['cost', 'vendor', 'category', 'rate', 'additional-costs', 'volume-analysis', 'custom'];
+    const validViews: ItemViewType[] = ['cost', 'vendor', 'category', 'rate', 'additional-costs', 'volume-analysis', 'project-delta', 'custom'];
     if (navigationContext.targetView) {
       // Navigate to specific view (e.g., from Summary "View All Items in Cost View")
       const viewId = navigationContext.targetView as ItemViewType;
@@ -179,6 +183,16 @@ export default function ItemsTab({
             costViewData={costViewData}
             currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
+            navigateToTab={navigateToTab}
+            navigationContext={navigationContext}
+            filterResetKey={filterResetKey}
+            onClearAllFilters={clearAllFilters}
+          />
+        )}
+        {selectedView === 'project-delta' && (
+          <ProjectDeltaView
+            projectDeltaData={projectDeltaData}
+            currencySymbol={currencySymbol}
             navigateToTab={navigateToTab}
             navigationContext={navigationContext}
             filterResetKey={filterResetKey}

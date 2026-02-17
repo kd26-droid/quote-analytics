@@ -1,9 +1,12 @@
 import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import type { CostViewData, CostViewItem } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
+
+const BOM_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#06b6d4', '#84cc16', '#f97316', '#6366f1', '#14b8a6', '#e11d48', '#a855f7', '#65a30d'];
 
 interface BOMVolumeAnalysisViewProps {
   costViewData: CostViewData;
@@ -38,8 +41,9 @@ export default function BOMVolumeAnalysisView({
   filterResetKey,
   onClearAllFilters
 }: BOMVolumeAnalysisViewProps) {
-  // Hovered BOM in slope chart
+  // Hovered BOM — set by chart dot/line hover, filters the table
   const [hoveredBOM, setHoveredBOM] = useState<string | null>(null);
+  const chartContainerRef = React.useRef<HTMLDivElement>(null);
 
   // View selection
   const [selectedView, setSelectedView] = useState<BOMVolumeViewType>('per_unit_total');
@@ -350,30 +354,89 @@ export default function BOMVolumeAnalysisView({
     return { total: filteredData.length, cheaperAtScale, moreExpensive, unchanged };
   }, [filteredData, selectedView]);
 
-  // Slope chart data for visualization
-  const slopeChartData = useMemo(() => {
-    return filteredData.slice(0, 12).map(bom => {
-      const first = bom.instances[0];
-      const last = bom.instances[bom.instances.length - 1];
-      const startValue = getValue(first);
-      const endValue = getValue(last);
-      const pctChange = startValue > 0 ? ((endValue - startValue) / startValue) * 100 : 0;
-      // For per-unit metrics, price should DECREASE at higher volume
-      // For total_cost, it will naturally increase (more units = more total cost)
-      const isAnomaly = selectedView !== 'total_cost' ? pctChange >= 0 : false;
+  // Build line chart data — volume (X) vs price (Y) with per-segment coloring
+  const lineChartData = useMemo(() => {
+    const volumeLevels = uniqueBOMInstances.map(i => i.qty);
+    const chartBOMs = filteredData.slice(0, 15);
 
-      return {
-        bom_code: bom.bom_code,
-        bom_name: bom.bom_name,
-        startValue,
-        endValue,
-        startQty: first.bom_instance_qty,
-        endQty: last.bom_instance_qty,
-        pctChange,
-        isAnomaly
-      };
+    // One entry per volume level
+    const data = volumeLevels.map(vol => {
+      const entry: Record<string, any> = { volume: vol };
+
+      chartBOMs.forEach((bom, idx) => {
+        const inst = bom.instances.find(i => i.bom_instance_qty === vol);
+        if (inst) {
+          entry[`bom_${idx}`] = getValue(inst);
+        }
+
+        for (let s = 0; s < bom.instances.length - 1; s++) {
+          const startInst = bom.instances[s];
+          const endInst = bom.instances[s + 1];
+          if (vol === startInst.bom_instance_qty || vol === endInst.bom_instance_qty) {
+            const instAtVol = bom.instances.find(i => i.bom_instance_qty === vol);
+            if (instAtVol) {
+              entry[`bom_${idx}_seg${s}`] = getValue(instAtVol);
+            }
+          }
+        }
+      });
+
+      return entry;
     });
-  }, [filteredData, selectedView]);
+
+    const bomMeta = chartBOMs.map((bom, idx) => ({
+      idx,
+      bom_code: bom.bom_code,
+      bom_name: bom.bom_name,
+      dotKey: `bom_${idx}`,
+      segments: bom.instances.slice(0, -1).map((inst, s) => {
+        const nextInst = bom.instances[s + 1];
+        const currentPrice = getValue(inst);
+        const nextPrice = getValue(nextInst);
+        // For per-unit metrics, price going up is anomaly; for total_cost it naturally increases
+        const isAnomaly = selectedView !== 'total_cost' ? nextPrice > currentPrice : false;
+        return {
+          key: `bom_${idx}_seg${s}`,
+          isAnomaly,
+          color: isAnomaly ? '#ef4444' : '#10b981',
+        };
+      })
+    }));
+
+    return { data, bomMeta };
+  }, [filteredData, uniqueBOMInstances, selectedView]);
+
+  // Native SVG event listener — detect hover on line segments (paths)
+  React.useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+
+    const onOver = (e: MouseEvent) => {
+      const target = e.target as Element;
+      if (target.tagName === 'path' && target.classList.contains('recharts-curve')) {
+        const lineGroup = target.closest('[class*="seg-"]');
+        if (lineGroup) {
+          const cls = lineGroup.getAttribute('class') || '';
+          const match = cls.match(/seg-(\d+)/);
+          if (match) {
+            const idx = parseInt(match[1]);
+            const meta = lineChartData.bomMeta[idx];
+            if (meta) { setHoveredBOM(meta.bom_code); return; }
+          }
+        }
+      }
+      if (target.tagName === 'circle') return;
+    };
+
+    const onLeave = () => setHoveredBOM(null);
+
+    el.addEventListener('mouseover', onOver);
+    el.addEventListener('mouseleave', onLeave);
+    return () => {
+      el.removeEventListener('mouseover', onOver);
+      el.removeEventListener('mouseleave', onLeave);
+    };
+  }, [lineChartData.bomMeta]);
 
   // No volume scenarios
   if (!hasVolumeScenarios || bomVolumeData.length === 0) {
@@ -446,103 +509,165 @@ export default function BOMVolumeAnalysisView({
         </Card>
       </div>
 
-      {/* DOT STRIP - % Change anomaly detection */}
-      {slopeChartData.length > 0 && (() => {
-        const changes = slopeChartData.map(d => d.pctChange);
-        const minChange = Math.min(...changes, -1);
-        const maxChange = Math.max(...changes, 1);
-        const rangePad = (maxChange - minChange) * 0.08 || 2;
-        const rangeMin = minChange - rangePad;
-        const rangeMax = maxChange + rangePad;
-        const zeroPos = ((0 - rangeMin) / (rangeMax - rangeMin)) * 100;
-
-        return (
-          <Card className="border-gray-300">
-            <CardContent className="px-6 py-4">
-              <div className="flex items-center justify-between mb-1">
-                <h4 className="font-bold text-gray-900 text-sm">
-                  {VIEW_OPTIONS.find(v => v.value === selectedView)?.label}: Price Change
-                </h4>
-                <div className="flex items-center gap-4 text-xs">
-                  <span className="flex items-center gap-1.5">
-                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
-                    <span className="text-gray-600">Price decreased</span>
-                  </span>
-                  {selectedView !== 'total_cost' && (
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block"></span>
-                      <span className="text-red-600 font-medium">Anomaly</span>
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              <div className="relative h-16 mt-2">
-                <div className="absolute top-1/2 -translate-y-1/2 left-0 right-0 h-[2px] bg-gray-200 rounded-full" />
-
-                <div
-                  className="absolute top-0 bottom-0 w-[1.5px] bg-gray-400"
-                  style={{ left: `${zeroPos}%` }}
-                />
-                <span
-                  className="absolute -bottom-1 text-[10px] font-semibold text-gray-500 -translate-x-1/2"
-                  style={{ left: `${zeroPos}%` }}
-                >
-                  0%
+      {/* Volume vs Price Line Chart */}
+      {lineChartData.data.length > 0 && (
+        <Card className="border-gray-300">
+          <CardContent className="px-6 py-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-bold text-gray-900 text-sm">
+                {VIEW_OPTIONS.find(v => v.value === selectedView)?.label}: Volume vs Price
+              </h4>
+              <div className="flex items-center gap-4 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className="w-6 h-[2px] bg-emerald-500 inline-block"></span>
+                  <span className="text-gray-600">Price decreased</span>
                 </span>
+                {selectedView !== 'total_cost' && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-6 h-[2px] bg-red-500 inline-block"></span>
+                    <span className="text-red-600 font-medium">Anomaly (price increased)</span>
+                  </span>
+                )}
+              </div>
+            </div>
 
-                {slopeChartData.map((bom) => {
-                  const xPos = ((bom.pctChange - rangeMin) / (rangeMax - rangeMin)) * 100;
-                  const isHovered = hoveredBOM === bom.bom_code;
-                  const isAnyHovered = hoveredBOM !== null;
+            <div className="max-w-4xl mx-auto" ref={chartContainerRef}>
+              <ResponsiveContainer width="100%" height={380}>
+                <LineChart data={lineChartData.data} margin={{ top: 10, right: 30, left: 10, bottom: 20 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                  <XAxis
+                    dataKey="volume"
+                    type="category"
+                    tick={{ fontSize: 12, fill: '#374151' }}
+                    tickFormatter={(val) => Number(val).toLocaleString()}
+                    label={{ value: 'Volume (units)', position: 'insideBottom', offset: -10, fontSize: 12, fill: '#6b7280' }}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#374151' }}
+                    tickFormatter={(val) => `${currencySymbol}${Number(val).toLocaleString()}`}
+                    width={70}
+                  />
+                  <Tooltip content={() => null} />
 
-                  return (
-                    <div
-                      key={bom.bom_code}
-                      className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 cursor-pointer transition-all duration-150 p-2"
-                      style={{
-                        left: `${xPos}%`,
-                        zIndex: isHovered ? 20 : bom.isAnomaly ? 10 : 1,
-                        opacity: isAnyHovered && !isHovered ? 0.2 : 1,
-                      }}
-                      onMouseEnter={() => setHoveredBOM(bom.bom_code)}
-                      onMouseLeave={() => setHoveredBOM(null)}
-                    >
-                      <div
-                        className={`rounded-full transition-all duration-150 ${
-                          bom.isAnomaly
-                            ? `bg-red-500 ${isHovered ? 'w-5 h-5 ring-4 ring-red-100' : 'w-3.5 h-3.5 ring-2 ring-red-100'}`
-                            : `bg-emerald-500 ${isHovered ? 'w-5 h-5 ring-4 ring-emerald-100' : 'w-3 h-3'}`
-                        }`}
+                  {lineChartData.bomMeta.map((bom) => (
+                    <React.Fragment key={bom.dotKey}>
+                      <Line
+                        type="linear"
+                        dataKey={bom.dotKey}
+                        stroke="transparent"
+                        strokeWidth={0}
+                        dot={{
+                          fill: BOM_COLORS[bom.idx % BOM_COLORS.length],
+                          r: 6,
+                          strokeWidth: 2,
+                          stroke: '#fff'
+                        }}
+                        activeDot={(props: any) => (
+                          <circle
+                            cx={props.cx}
+                            cy={props.cy}
+                            r={8}
+                            fill="#fff"
+                            stroke={BOM_COLORS[bom.idx % BOM_COLORS.length]}
+                            strokeWidth={3}
+                            onMouseEnter={() => setHoveredBOM(bom.bom_code)}
+                            onMouseLeave={() => setHoveredBOM(null)}
+                            style={{ cursor: 'pointer' }}
+                          />
+                        )}
+                        isAnimationActive={false}
+                        name={bom.bom_code}
                       />
-                      {isHovered && (
-                        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-gray-900 text-white text-xs rounded-lg px-3 py-2 whitespace-nowrap shadow-lg pointer-events-none">
-                          <div className="font-bold">{bom.bom_code}</div>
-                          <div className="text-gray-300">{bom.bom_name}</div>
-                          <div className="mt-1 font-mono">
-                            <span className={bom.isAnomaly ? 'text-red-300' : 'text-emerald-300'}>
-                              {bom.pctChange > 0 ? '+' : ''}{bom.pctChange.toFixed(1)}%
-                            </span>
-                            <span className="text-gray-400 ml-2">
-                              {currencySymbol}{bom.startValue.toFixed(2)} → {currencySymbol}{bom.endValue.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900" />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
 
-              <div className="flex justify-between mt-1 text-[10px] text-gray-400">
-                <span>{minChange.toFixed(0)}%</span>
-                <span>{maxChange > 0 ? `+${maxChange.toFixed(0)}` : maxChange.toFixed(0)}%</span>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })()}
+                      {bom.segments.map((seg) => (
+                        <Line
+                          key={seg.key}
+                          type="linear"
+                          dataKey={seg.key}
+                          stroke={seg.color}
+                          strokeWidth={4}
+                          dot={false}
+                          activeDot={false}
+                          isAnimationActive={false}
+                          legendType="none"
+                          name=""
+                          className={`seg-${bom.idx}`}
+                          style={{ cursor: 'pointer' }}
+                        />
+                      ))}
+                    </React.Fragment>
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* BOM legend */}
+            <div className="flex flex-wrap justify-center gap-x-5 gap-y-1.5 mt-2">
+              {lineChartData.bomMeta.map((bom) => {
+                const bomHasAnomaly = bom.segments.some(s => s.isAnomaly);
+                return (
+                  <div
+                    key={bom.idx}
+                    className={`flex items-center gap-1.5 text-xs cursor-pointer rounded px-2 py-1 transition-colors ${
+                      hoveredBOM === bom.bom_code ? 'bg-blue-50 font-bold' : 'hover:bg-gray-50'
+                    }`}
+                    onMouseEnter={() => setHoveredBOM(bom.bom_code)}
+                    onMouseLeave={() => setHoveredBOM(null)}
+                  >
+                    <span
+                      className="w-3 h-3 rounded-full inline-block flex-shrink-0"
+                      style={{ backgroundColor: BOM_COLORS[bom.idx % BOM_COLORS.length] }}
+                    />
+                    <span className="text-gray-700 font-mono">{bom.bom_code}</span>
+                    {bomHasAnomaly && <span className="text-red-500 ml-0.5">!</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Hovered BOM detail panel */}
+            {hoveredBOM && (() => {
+              const meta = lineChartData.bomMeta.find(m => m.bom_code === hoveredBOM);
+              const bom = filteredData.find(d => d.bom_code === hoveredBOM);
+              if (!meta || !bom) return null;
+
+              const first = bom.instances[0];
+              const last = bom.instances[bom.instances.length - 1];
+              const pctChange = getValue(first) > 0 ? ((getValue(last) - getValue(first)) / getValue(first)) * 100 : 0;
+              const bomHasAnomaly = meta.segments.some(s => s.isAnomaly);
+
+              return (
+                <div className="mt-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: BOM_COLORS[meta.idx % BOM_COLORS.length] }} />
+                    <span className="font-mono font-bold text-gray-900 text-sm">{bom.bom_code}</span>
+                    <span className="text-gray-600 text-xs truncate max-w-[200px]">{bom.bom_name}</span>
+                    <span className={`ml-auto font-mono font-semibold text-sm ${
+                      selectedView === 'total_cost' ? 'text-gray-700' : pctChange > 0 ? 'text-red-600' : 'text-green-600'
+                    }`}>
+                      {pctChange > 0 ? '+' : ''}{pctChange.toFixed(1)}%
+                      {bomHasAnomaly && <span className="ml-1 text-red-500">!</span>}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-6">
+                    {bom.instances.map((inst, i) => {
+                      const isAnomaly = selectedView !== 'total_cost' && i > 0 && getValue(inst) > getValue(bom.instances[i - 1]);
+                      return (
+                        <div key={i} className="text-center">
+                          <div className="text-[10px] text-gray-500 mb-0.5">{inst.bom_instance_qty.toLocaleString()} units</div>
+                          <div className={`font-mono font-semibold text-sm ${isAnomaly ? 'text-red-600' : 'text-gray-900'}`}>
+                            {currencySymbol}{getValue(inst).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Filters */}
       <Card className="border-gray-300">
@@ -687,19 +812,32 @@ export default function BOMVolumeAnalysisView({
       </Card>
 
       {/* Main Table */}
-      <Card className="border-gray-300 shadow-sm">
+      {(() => {
+        const tableData = hoveredBOM
+          ? sortedData.filter(bom => bom.bom_code === hoveredBOM)
+          : paginatedData;
+
+        return (
+      <Card className={`border-gray-300 shadow-sm transition-all duration-150 ${hoveredBOM ? 'ring-2 ring-blue-200' : ''}`}>
         <CardContent className="p-0">
           <div className="bg-gray-50 px-4 py-3 border-b border-gray-300 flex items-center justify-between">
             <div>
               <h4 className="font-bold text-gray-900 text-sm">
-                {VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison
+                {hoveredBOM ? (
+                  <span>{VIEW_OPTIONS.find(v => v.value === selectedView)?.label} — <span className="text-blue-600">{hoveredBOM}</span></span>
+                ) : (
+                  `${VIEW_OPTIONS.find(v => v.value === selectedView)?.label} Comparison`
+                )}
               </h4>
               <p className="text-xs text-gray-600 mt-0.5">
-                {VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
+                {hoveredBOM ? 'Hover on chart to filter' : VIEW_OPTIONS.find(v => v.value === selectedView)?.description}
               </p>
             </div>
             <div className="text-xs text-gray-600">
-              Showing {paginatedData.length} of {filteredData.length} BOMs
+              {hoveredBOM
+                ? <span className="text-blue-600 font-medium">Filtered by chart hover</span>
+                : `Showing ${paginatedData.length} of ${filteredData.length} BOMs`
+              }
             </div>
           </div>
 
@@ -741,7 +879,7 @@ export default function BOMVolumeAnalysisView({
                 </tr>
               </thead>
               <tbody>
-                {paginatedData.map((bom, idx) => {
+                {tableData.map((bom, idx) => {
                   const change = getChange(bom);
                   const firstValue = bom.instances.length > 0 ? getValue(bom.instances[0]) : 0;
 
@@ -749,7 +887,7 @@ export default function BOMVolumeAnalysisView({
                     <tr
                       key={bom.bom_code}
                       className={`border-b border-gray-200 hover:bg-gray-50 transition-colors duration-150 ${
-                        hoveredBOM === bom.bom_code ? 'bg-blue-50 ring-1 ring-inset ring-blue-200' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')
+                        hoveredBOM === bom.bom_code ? 'bg-blue-50' : (idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50')
                       }`}
                     >
                       <td className="px-4 py-3 font-mono text-blue-600 font-semibold sticky left-0 bg-inherit z-10">
@@ -801,8 +939,8 @@ export default function BOMVolumeAnalysisView({
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Pagination — hidden when chart hover is filtering */}
+          {!hoveredBOM && totalPages > 1 && (
             <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between bg-gray-50">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-gray-600">Rows per page:</span>
@@ -840,6 +978,8 @@ export default function BOMVolumeAnalysisView({
           )}
         </CardContent>
       </Card>
+        );
+      })()}
     </div>
   );
 }
