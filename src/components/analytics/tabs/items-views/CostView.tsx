@@ -504,10 +504,10 @@ export default function CostView({
         bVal = b.tags.length > 0 ? b.tags[0] : '';
       }
 
-      // Calculate percent_of_quote on the fly instead of using backend value
+      // Use backend-computed percent_of_quote for sorting
       if (sortColumn === 'percent_of_quote') {
-        aVal = totalQuoteValue > 0 ? a.total_amount / totalQuoteValue : 0;
-        bVal = totalQuoteValue > 0 ? b.total_amount / totalQuoteValue : 0;
+        aVal = a.percent_of_quote;
+        bVal = b.percent_of_quote;
       }
 
       // Handle dynamic attribute columns
@@ -611,10 +611,10 @@ export default function CostView({
       baseRate: item.base_rate,
       totalAmount: item.total_amount,
       ac: item.total_additional_cost,
-      percent: totalQuoteValue > 0 ? item.total_amount / totalQuoteValue : 0,
+      percent: item.percent_of_quote / 100,
       quantity: item.quantity
     }));
-  }, [filteredItems, chartViewMode, totalQuoteValue]);
+  }, [filteredItems, chartViewMode]);
 
   // BOM breakdown data - supports both total and base rate views
   const bomBreakdownData = useMemo(() => {
@@ -1926,9 +1926,9 @@ export default function CostView({
                     {visibleColumns.has('percent_of_quote') && (
                       <td
                         className="px-3 py-2.5 text-right text-gray-900 text-sm font-medium cursor-help"
-                        title={totalQuoteValue > 0 ? `${(item.total_amount / totalQuoteValue)}` : '0'}
+                        title={`${item.percent_of_quote}%`}
                       >
-                        {totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue).toFixed(2) : '0.00'}%
+                        {item.percent_of_quote.toFixed(2)}%
                       </td>
                     )}
                     {/* Dynamic attribute cells */}

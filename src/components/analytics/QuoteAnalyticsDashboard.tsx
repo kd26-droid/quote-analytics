@@ -102,6 +102,7 @@ export default function QuoteAnalyticsDashboard({
             data={data}
             costViewData={costViewData}
             bomDetailData={bomDetailData}
+            overallACData={overallACData}
             totalQuoteValue={totalQuoteValue}
             totalItems={totalItems}
             topCategories={topCategories}

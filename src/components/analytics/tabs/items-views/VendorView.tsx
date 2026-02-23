@@ -49,7 +49,7 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
 
   // Column visibility for vendor summary table
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
-    'vendor', 'items', 'totalCost', 'avgRate', 'percentOfQuote'
+    'vendor', 'items', 'totalCost', 'percentOfQuote'
   ]));
 
   // Column visibility for item detail table
@@ -62,7 +62,6 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
     { key: 'vendor', label: 'Vendor Name', align: 'left' },
     { key: 'items', label: 'Item Count', align: 'right' },
     { key: 'totalCost', label: 'Total Cost', align: 'right' },
-    { key: 'avgRate', label: 'Avg Rate', align: 'right' },
     { key: 'percentOfQuote', label: '% of Quote', align: 'right' },
   ];
 
@@ -333,7 +332,6 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
         vendor_id: stats.vendor_id,
         items: stats.items,
         totalCost: stats.totalCost,
-        avgRate: stats.totalQuantity > 0 ? stats.totalCost / stats.totalQuantity : 0,
         percentOfQuote: totalCostSum > 0 ? (stats.totalCost / totalCostSum) * 100 : 0
       }))
       .filter(v => v.totalCost >= minCost && v.items >= minItemCount);
@@ -411,13 +409,11 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
     if (vendorItems.length === 0) return null;
 
     const totalCost = vendorItems.reduce((sum, item) => sum + item.total_amount, 0);
-    const totalQuantity = vendorItems.reduce((sum, item) => sum + item.quantity, 0);
 
     return {
       vendor: selectedVendor,
       items: vendorItems.length,
       totalCost,
-      avgRate: totalQuantity > 0 ? totalCost / totalQuantity : 0,
       percentOfQuote: items.length > 0 ? (vendorItems.length / items.length) * 100 : 0
     };
   }, [filteredItems, selectedVendor, items]);
@@ -1311,11 +1307,6 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
                       {visibleColumns.has('totalCost') && (
                         <td className="px-3 py-2 text-right font-mono font-bold text-gray-900 border-r border-gray-200 text-sm">
                           {currencySymbol}{vendor.totalCost.toLocaleString()}
-                        </td>
-                      )}
-                      {visibleColumns.has('avgRate') && (
-                        <td className="px-3 py-2 text-right font-mono text-gray-700 border-r border-gray-200 text-sm">
-                          {currencySymbol}{vendor.avgRate.toFixed(2)}
                         </td>
                       )}
                       {visibleColumns.has('percentOfQuote') && (

@@ -120,6 +120,8 @@ export interface AdditionalCost {
   cost_value: number;
   total_amount: number;
   per_unit_amount: number;
+  cost_category?: 'RECURRING' | 'ONE_TIME';
+  is_hidden_from_customer?: boolean;
 }
 
 // Cost View Item
@@ -215,6 +217,8 @@ export interface RecurringCost {
   quoted_rate: number;
   quoted_rate_per_unit: number;
   quoted_amount: number;
+  cost_category?: 'RECURRING' | 'ONE_TIME';
+  is_hidden_from_customer?: boolean;
 }
 
 // BOM Level (in hierarchy)
@@ -365,6 +369,8 @@ export interface OverallACCost {
   quoted_rate: number;
   quoted_amount: number;
   calculation_formula: string;  // Human readable formula
+  cost_category?: 'RECURRING' | 'ONE_TIME';
+  is_hidden_from_customer?: boolean;
 }
 
 // Overall AC Base Amounts

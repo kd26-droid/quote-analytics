@@ -48,6 +48,7 @@ export default function AdditionalCostsView({
   // Filters
   const [selectedBOMInstances, setSelectedBOMInstances] = useState<string[]>(['all']);
   const [selectedACTypes, setSelectedACTypes] = useState<string[]>(['all']);
+  const [acInclusionFilter, setAcInclusionFilter] = useState<'all' | 'included' | 'not_included'>('all');
   const [selectedVendors, setSelectedVendors] = useState<string[]>(['all']);
   const [selectedBOMs, setSelectedBOMs] = useState<string[]>(['all']);
   const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
@@ -136,16 +137,23 @@ export default function AdditionalCostsView({
     return newSelection;
   };
 
-  // Get all unique AC types from items
-  const allACTypes = useMemo(() => {
-    const acTypeSet = new Set<string>();
+  // Get all unique AC types from items with inclusion info
+  const allACTypesWithInfo = useMemo(() => {
+    const acTypeMap = new Map<string, boolean>();
     items.forEach(item => {
       item.additional_costs.forEach(ac => {
-        acTypeSet.add(ac.cost_name);
+        // Track is_calculated per cost_name (first occurrence wins)
+        if (!acTypeMap.has(ac.cost_name)) {
+          acTypeMap.set(ac.cost_name, ac.is_calculated);
+        }
       });
     });
-    return Array.from(acTypeSet).sort();
+    return Array.from(acTypeMap.entries())
+      .map(([name, isCalculated]) => ({ name, isCalculated }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }, [items]);
+
+  const allACTypes = useMemo(() => allACTypesWithInfo.map(t => t.name), [allACTypesWithInfo]);
 
   // Get unique BOMs with hierarchy
   const { uniqueBOMs, rootBOMCount } = useMemo(() => {
@@ -381,8 +389,8 @@ export default function AdditionalCostsView({
           bVal = b.total_amount;
           break;
         case 'ac_percent':
-          aVal = a.total_amount > 0 ? (a.total_additional_cost / a.total_amount) * 100 : 0;
-          bVal = b.total_amount > 0 ? (b.total_additional_cost / b.total_amount) * 100 : 0;
+          aVal = a.total_additional_cost;
+          bVal = b.total_additional_cost;
           break;
         default:
           aVal = a[sortColumn as keyof CostViewItem] || 0;
@@ -402,12 +410,12 @@ export default function AdditionalCostsView({
     return filteredItems.slice(start, start + pageSize);
   }, [filteredItems, currentPage, pageSize]);
 
-  // AC type breakdown for charts (from filtered items)
+  // AC type breakdown for charts (from filtered items) — only is_calculated costs
   const acTypeBreakdown = useMemo(() => {
     const typeMap = new Map<string, number>();
     baseFilteredItems.forEach(item => {
       item.additional_costs.forEach(ac => {
-        // Only include AC types that match the filter (or all if no filter)
+        if (!ac.is_calculated) return; // Only included costs in chart
         if (selectedACTypes.includes('all') || selectedACTypes.includes(ac.cost_name)) {
           typeMap.set(ac.cost_name, (typeMap.get(ac.cost_name) || 0) + ac.total_amount);
         }
@@ -575,7 +583,7 @@ export default function AdditionalCostsView({
   }, [baseFilteredItems, acTypeBreakdown]);
 
   // Check if any filters are active
-  const hasActiveFilters = !selectedACTypes.includes('all') || !selectedVendors.includes('all') ||
+  const hasActiveFilters = !selectedACTypes.includes('all') || acInclusionFilter !== 'all' || !selectedVendors.includes('all') ||
     !selectedBOMs.includes('all') || !selectedCategories.includes('all') ||
     searchQuery.trim() !== '' || !hasACOnly || !selectedBOMInstances.includes('all');
 
@@ -585,6 +593,7 @@ export default function AdditionalCostsView({
     if (filterResetKey !== undefined && filterResetKey > 0) {
       setSelectedBOMInstances(['all']);
       setSelectedACTypes(['all']);
+      setAcInclusionFilter('all');
       setSelectedVendors(['all']);
       setSelectedBOMs(['all']);
       setSelectedCategories(['all']);
@@ -597,6 +606,7 @@ export default function AdditionalCostsView({
   const clearAllFilters = () => {
     setSelectedBOMInstances(['all']);
     setSelectedACTypes(['all']);
+    setAcInclusionFilter('all');
     setSelectedVendors(['all']);
     setSelectedBOMs(['all']);
     setSelectedCategories(['all']);
@@ -611,9 +621,19 @@ export default function AdditionalCostsView({
 
   // Filtered dropdown lists
   const filteredACTypeList = useMemo(() => {
-    if (!acTypeSearch.trim()) return allACTypes;
-    return allACTypes.filter(t => t.toLowerCase().includes(acTypeSearch.toLowerCase()));
-  }, [allACTypes, acTypeSearch]);
+    let types = allACTypesWithInfo;
+    // Apply inclusion sub-filter
+    if (acInclusionFilter === 'included') {
+      types = types.filter(t => t.isCalculated);
+    } else if (acInclusionFilter === 'not_included') {
+      types = types.filter(t => !t.isCalculated);
+    }
+    // Apply search
+    if (acTypeSearch.trim()) {
+      types = types.filter(t => t.name.toLowerCase().includes(acTypeSearch.toLowerCase()));
+    }
+    return types;
+  }, [allACTypesWithInfo, acTypeSearch, acInclusionFilter]);
 
   const filteredBOMList = useMemo(() => {
     if (!bomSearch.trim()) return uniqueBOMs;
@@ -1023,7 +1043,7 @@ export default function AdditionalCostsView({
               </button>
 
               {openDropdown === 'actype' && (
-                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-72">
+                <div className="absolute top-full left-0 mt-1 bg-white border border-gray-300 rounded-lg shadow-xl z-50 w-80">
                   <div className="p-2 border-b border-gray-200">
                     <input
                       type="text"
@@ -1034,6 +1054,25 @@ export default function AdditionalCostsView({
                       onClick={(e) => e.stopPropagation()}
                     />
                   </div>
+                  {/* Inclusion sub-filter tabs */}
+                  <div className="flex border-b border-gray-200 px-2 pt-2 gap-1">
+                    {(['all', 'included', 'not_included'] as const).map(filter => (
+                      <button
+                        key={filter}
+                        onClick={(e) => { e.stopPropagation(); setAcInclusionFilter(filter); }}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+                          acInclusionFilter === filter
+                            ? 'bg-white border border-b-white border-gray-200 text-gray-900 -mb-px'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {filter === 'all' ? 'All' : filter === 'included' ? 'Included' : 'Not Included'}
+                        <span className="ml-1 text-[10px] text-gray-400">
+                          ({filter === 'all' ? allACTypesWithInfo.length : filter === 'included' ? allACTypesWithInfo.filter(t => t.isCalculated).length : allACTypesWithInfo.filter(t => !t.isCalculated).length})
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                   <div className="px-2 py-2 border-b border-gray-100">
                     <label className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-100 rounded cursor-pointer">
                       <input
@@ -1042,29 +1081,34 @@ export default function AdditionalCostsView({
                         onChange={() => setSelectedACTypes(['all'])}
                         className="rounded border-gray-300"
                       />
-                      <span className="text-sm font-medium text-gray-900">All AC Types ({allACTypes.length})</span>
+                      <span className="text-sm font-medium text-gray-900">All AC Types ({filteredACTypeList.length})</span>
                     </label>
                   </div>
                   <div className="max-h-48 overflow-y-auto py-1">
                     {filteredACTypeList.map(acType => (
                       <label
-                        key={acType}
+                        key={acType.name}
                         className={`flex items-center gap-2 px-4 py-2 hover:bg-gray-100 cursor-pointer ${
-                          selectedACTypes.includes(acType) ? 'bg-orange-50' : ''
+                          selectedACTypes.includes(acType.name) ? 'bg-orange-50' : ''
                         }`}
                       >
                         <input
                           type="checkbox"
-                          checked={selectedACTypes.includes(acType)}
-                          onChange={() => setSelectedACTypes(toggleSelection(selectedACTypes, acType))}
+                          checked={selectedACTypes.includes(acType.name)}
+                          onChange={() => setSelectedACTypes(toggleSelection(selectedACTypes, acType.name))}
                           className="rounded border-gray-300"
                         />
-                        <span className="text-sm text-gray-700 truncate">{acType}</span>
+                        <span className="text-sm text-gray-700 truncate flex-1">{acType.name}</span>
+                        {acType.isCalculated ? (
+                          <span className="text-[10px] font-medium text-green-700 bg-green-100 px-1.5 py-0.5 rounded shrink-0">Included</span>
+                        ) : (
+                          <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">Input only</span>
+                        )}
                       </label>
                     ))}
                   </div>
                   <div className="p-2 border-t border-gray-200 flex justify-between">
-                    <button onClick={() => setSelectedACTypes(['all'])} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
+                    <button onClick={() => { setSelectedACTypes(['all']); setAcInclusionFilter('all'); }} className="text-xs text-gray-600 hover:text-gray-900">Clear</button>
                     <button onClick={() => setOpenDropdown(null)} className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
                   </div>
                 </div>
@@ -1488,7 +1532,7 @@ export default function AdditionalCostsView({
               <tbody className="bg-white">
                 {paginatedItems.map((item, idx) => {
                   const itemCost = item.base_rate * item.quantity;
-                  const acPercent = item.total_amount > 0 ? (item.total_additional_cost / item.total_amount) * 100 : 0;
+                  const acPercent = insights.totalAC > 0 ? (item.total_additional_cost / insights.totalAC) * 100 : 0;
 
                   return (
                     <tr

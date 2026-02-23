@@ -205,7 +205,7 @@ function App() {
               </tr>
               <tr>
                 <td style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>Total Items</td>
-                <td style={{ fontWeight: '600', color: '#111827', fontSize: '16px' }}>{costViewData.summary.total_costing_sheet_items}</td>
+                <td style={{ fontWeight: '600', color: '#111827', fontSize: '16px' }}>{costViewData.items.length}</td>
                 <td style={{ fontWeight: '600', color: '#374151', fontSize: '14px' }}>BOMs</td>
                 <td style={{ fontWeight: '600', color: '#111827', fontSize: '16px' }}>{headerData.bom_summary.bom_list.map(bom => bom.bom_name).join(', ') || '-'}</td>
               </tr>
@@ -221,7 +221,7 @@ function App() {
           overallACData={overallACData}
           projectDeltaData={projectDeltaData}
           totalQuoteValue={costViewData.summary.grand_total}
-          totalItems={costViewData.summary.total_costing_sheet_items}
+          totalItems={costViewData.items.length}
           topCategories={analyticsData.topCategories}
           topVendors={analyticsData.topVendors}
           additionalCosts={analyticsData.additionalCostsBreakdown}

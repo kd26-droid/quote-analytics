@@ -283,8 +283,9 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
       const totalAC = item.total_additional_cost || 0;
       const itemTotal = item.total_amount || 0;
 
-      // Calculate markup from vendor rate to base rate
-      const markup = vendorRate > 0 ? ((baseRate - vendorRate) / vendorRate) * 100 : 0;
+      // Calculate markup: (Selling Price - Cost) / Cost * 100
+      // Selling Price = quoted_rate (landed rate), Cost = base_rate (buyer base)
+      const markup = baseRate > 0 ? ((quotedRate - baseRate) / baseRate) * 100 : 0;
 
       // Get vendor currency symbol from code
       const vendorCurrencySymbol = getCurrencySymbol(item.vendor_currency);
@@ -548,7 +549,7 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
           <CardContent className="p-5">
             <div className="text-sm font-bold text-gray-700 mb-2">Avg Markup</div>
             <div className="text-3xl font-bold text-green-600">{insights.avgMarkup.toFixed(1)}%</div>
-            <div className="text-sm font-medium text-gray-700 mt-2">vendor → buyer base</div>
+            <div className="text-sm font-medium text-gray-700 mt-2">base → landed rate</div>
           </CardContent>
         </Card>
 

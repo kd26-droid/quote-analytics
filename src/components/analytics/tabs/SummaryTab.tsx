@@ -1,14 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Card, CardContent } from '../../ui/card';
 import type { TopItemsAnalytics, Category, Vendor } from '../../../types/quote.types';
 import type { TabType, NavigationContext } from '../QuoteAnalyticsDashboard';
-import type { CostViewData, BOMDetailData } from '../../../services/api';
+import type { CostViewData, BOMDetailData, OverallACData } from '../../../services/api';
 import { AttributeTooltip } from '../../ui/attribute-tooltip';
 
 interface SummaryTabProps {
   data: TopItemsAnalytics;
   costViewData?: CostViewData;
   bomDetailData?: BOMDetailData | null;
+  overallACData?: OverallACData | null;
   totalQuoteValue: number;
   totalItems: number;
   topCategories: Category[];
@@ -19,10 +20,130 @@ interface SummaryTabProps {
 
 const COLORS = ['#2563eb', '#7c3aed', '#db2777', '#ea580c', '#059669', '#0891b2'];
 
+// Shared AC cost row component
+function ACCostRow({ ac, currencySymbol }: {
+  ac: { costName: string; total: number; count?: number; isCalculated: boolean; costCategory?: 'RECURRING' | 'ONE_TIME'; isHiddenFromCustomer?: boolean };
+  currencySymbol: string;
+}) {
+  return (
+    <div className={`flex items-center justify-between py-2.5 px-3 rounded ${ac.isCalculated ? 'bg-white' : 'bg-gray-50'}`}>
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`text-sm font-medium truncate ${ac.isCalculated ? 'text-gray-900' : 'text-gray-400'}`}>
+          {ac.costName}
+        </span>
+        <div className="flex items-center gap-1 shrink-0">
+          {ac.isCalculated ? (
+            <span title="Included in final calculation" className="inline-flex items-center gap-0.5 text-[10px] font-medium text-green-700 bg-green-100 px-1.5 py-0.5 rounded cursor-help">
+              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+              Included
+            </span>
+          ) : (
+            <span title="Not included in final calculation (input only)" className="text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded cursor-help">
+              Input only
+            </span>
+          )}
+          {ac.costCategory === 'RECURRING' && (
+            <span title="Recurring cost — applied per unit" className="text-[10px] font-medium text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded cursor-help">
+              Recurring
+            </span>
+          )}
+          {ac.costCategory === 'ONE_TIME' && (
+            <span title="One-time cost — applied once" className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded cursor-help">
+              One-time
+            </span>
+          )}
+          {ac.isHiddenFromCustomer && (
+            <span title="Hidden from customer" className="text-[10px] font-medium text-red-500 bg-red-50 px-1.5 py-0.5 rounded cursor-help">
+              Hidden
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        {ac.count !== undefined && (
+          <span className="text-xs text-gray-400">{ac.count} items</span>
+        )}
+        <span className={`text-sm font-bold font-mono ${ac.isCalculated ? 'text-gray-900' : 'text-gray-400'}`}>
+          {currencySymbol}{ac.total.toLocaleString()}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Accordion component for each AC level
+function ACAccordion({ title, subtitle, total, percentOfQuote, breakdown, currencySymbol, borderColor, bgColor, onNavigate, navigateLabel }: {
+  title: string;
+  subtitle: string;
+  total: number;
+  percentOfQuote: number;
+  breakdown: Array<{ costName: string; total: number; count?: number; isCalculated: boolean; costCategory?: 'RECURRING' | 'ONE_TIME'; isHiddenFromCustomer?: boolean }>;
+  currencySymbol: string;
+  borderColor: string;
+  bgColor: string;
+  onNavigate: () => void;
+  navigateLabel: string;
+}) {
+  const [isOpen, setIsOpen] = useState(true);
+  const includedCount = breakdown.filter(b => b.isCalculated).length;
+  const inputCount = breakdown.length - includedCount;
+
+  return (
+    <div className={`border-l-4 ${borderColor} rounded-r-lg overflow-hidden`}>
+      {/* Accordion Header */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full flex items-center justify-between p-4 ${bgColor} hover:brightness-95 transition-all`}
+      >
+        <div className="flex items-center gap-3">
+          <svg
+            className={`w-4 h-4 text-gray-600 transition-transform ${isOpen ? 'rotate-90' : ''}`}
+            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+          <div className="text-left">
+            <h4 className="font-bold text-gray-900 text-sm">{title}</h4>
+            <p className="text-xs text-gray-500">{subtitle} — {includedCount} included{inputCount > 0 ? `, ${inputCount} input only` : ''}</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-bold text-gray-900">{currencySymbol}{total.toLocaleString()}</div>
+          <div className="text-xs text-gray-500">{percentOfQuote.toFixed(2)}% of quote</div>
+        </div>
+      </button>
+
+      {/* Accordion Content */}
+      {isOpen && (
+        <div className="bg-white border-t border-gray-200">
+          {breakdown.length > 0 ? (
+            <div className="divide-y divide-gray-100 px-2 py-1">
+              {breakdown.map((ac) => (
+                <ACCostRow key={ac.costName} ac={ac} currencySymbol={currencySymbol} />
+              ))}
+            </div>
+          ) : (
+            <div className="p-4 text-sm text-gray-400 text-center">No additional costs at this level</div>
+          )}
+          <div className="px-4 py-2 border-t border-gray-100">
+            <button
+              onClick={(e) => { e.stopPropagation(); onNavigate(); }}
+              className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+            >
+              {navigateLabel} →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SummaryTab({
   data,
   costViewData,
   bomDetailData,
+  overallACData,
   totalQuoteValue,
   totalItems,
   topCategories,
@@ -32,7 +153,7 @@ export default function SummaryTab({
 }: SummaryTabProps) {
 
   // Top 10 items from real API data (costViewData)
-  // % of Quote calculated same as CostView: total_amount / totalQuoteValue
+  // % of Quote uses backend-computed percent_of_quote field
   const top10Items = useMemo(() => {
     if (costViewData?.items) {
       // Sort by total_amount descending and take top 10
@@ -45,7 +166,7 @@ export default function SummaryTab({
           cost: item.base_rate * item.quantity, // Base cost = base_rate × quantity (before AC)
           additionalCost: item.total_additional_cost,
           totalCost: item.total_amount,
-          percent: totalQuoteValue > 0 ? (item.total_amount / totalQuoteValue) * 100 : 0,
+          percent: item.percent_of_quote,
           vendor: item.vendor_name || 'Unknown',
           category: item.tags?.[0] || 'Uncategorized',
           attributes: item.attributes
@@ -174,25 +295,28 @@ export default function SummaryTab({
     return topCategories.length;
   }, [costViewData, topCategories]);
 
-  // BOM breakdown from bomDetailData (same logic as BOMComparisonView)
-  // Shows main BOMs (level 0) from each instance
+  // BOM breakdown from bomDetailData — includes all sub-BOM costs rolled up
   const bomBreakdown = useMemo(() => {
     if (bomDetailData?.bom_instances) {
-      return bomDetailData.bom_instances.map((instance, idx) => {
-        // Get the main BOM (level 0) from hierarchy
+      return bomDetailData.bom_instances.map((instance) => {
         const mainBOM = instance.hierarchy.find(h => h.bom_level === 0);
         if (!mainBOM) return null;
 
         const instanceLabel = bomDetailData.bom_instances.length > 1 ? ` (#${instance.instance_index})` : '';
 
+        // Sum across ALL hierarchy levels (main + sub + sub-sub)
+        const itemsSubtotal = instance.hierarchy.reduce((sum, h) => sum + h.total_item_cost, 0);
+        const bomAdditionalCost = instance.hierarchy.reduce((sum, h) => sum + h.total_bom_ac_quoted, 0);
+        const total = itemsSubtotal + bomAdditionalCost;
+
         return {
           code: mainBOM.bom_code + instanceLabel,
           name: mainBOM.bom_name,
           quantity: mainBOM.bom_quantity,
-          itemsSubtotal: mainBOM.total_item_cost,
-          bomAdditionalCost: mainBOM.total_bom_ac_quoted,
-          total: mainBOM.total_quoted_amount,
-          percent: totalQuoteValue > 0 ? (mainBOM.total_quoted_amount / totalQuoteValue) * 100 : 0
+          itemsSubtotal,
+          bomAdditionalCost,
+          total,
+          percent: totalQuoteValue > 0 ? (total / totalQuoteValue) * 100 : 0
         };
       }).filter(Boolean) as Array<{
         code: string;
@@ -212,58 +336,117 @@ export default function SummaryTab({
     return (bomDetailData?.bom_instances?.length || 0) > 1;
   }, [bomDetailData]);
 
+  // Shared type for AC breakdown entries
+  type ACBreakdownEntry = {
+    costName: string;
+    total: number;
+    count?: number;
+    isCalculated: boolean;
+    costCategory?: 'RECURRING' | 'ONE_TIME';
+    isHiddenFromCustomer?: boolean;
+  };
+
   // Additional Costs breakdown from real API data
   const additionalCostsData = useMemo(() => {
     // Item Level AC - from costViewData.items
-    const itemLevelBreakdown = new Map<string, { total: number; count: number }>();
+    const itemLevelBreakdown = new Map<string, ACBreakdownEntry>();
     let itemLevelTotal = 0;
 
     if (costViewData?.items) {
       costViewData.items.forEach(item => {
-        if (item.total_additional_cost > 0) {
-          itemLevelTotal += item.total_additional_cost;
-          item.additional_costs.forEach(ac => {
-            const existing = itemLevelBreakdown.get(ac.cost_name) || { total: 0, count: 0 };
-            existing.total += ac.total_amount;
-            existing.count += 1;
-            itemLevelBreakdown.set(ac.cost_name, existing);
-          });
-        }
+        itemLevelTotal += item.total_additional_cost;
+        item.additional_costs.forEach(ac => {
+          const existing = itemLevelBreakdown.get(ac.cost_name) || {
+            costName: ac.cost_name, total: 0, count: 0,
+            isCalculated: ac.is_calculated,
+            costCategory: ac.cost_category,
+            isHiddenFromCustomer: ac.is_hidden_from_customer,
+          };
+          existing.total += ac.total_amount;
+          existing.count = (existing.count || 0) + 1;
+          itemLevelBreakdown.set(ac.cost_name, existing);
+        });
       });
     }
 
     const itemLevel = {
       total: itemLevelTotal,
       percentOfQuote: totalQuoteValue > 0 ? (itemLevelTotal / totalQuoteValue) * 100 : 0,
-      breakdown: Array.from(itemLevelBreakdown.entries())
-        .map(([costName, data]) => ({ costName, total: data.total, count: data.count }))
-        .sort((a, b) => b.total - a.total)
+      breakdown: Array.from(itemLevelBreakdown.values())
+        .sort((a, b) => {
+          if (a.isCalculated !== b.isCalculated) return a.isCalculated ? -1 : 1;
+          return b.total - a.total;
+        })
     };
 
-    // BOM Level AC - sum from bomBreakdown
-    const bomLevelTotal = bomBreakdown.reduce((sum, bom) => sum + bom.bomAdditionalCost, 0);
-    const bomLevel = {
-      total: bomLevelTotal,
-      percentOfQuote: totalQuoteValue > 0 ? (bomLevelTotal / totalQuoteValue) * 100 : 0
-    };
+    // BOM Level AC - break down by individual cost names from recurring_costs
+    const bomCostBreakdown = new Map<string, ACBreakdownEntry>();
+    let bomLevelTotal = 0;
 
-    // Overall Level AC - from costViewData.overall_additional_costs
-    const overallBreakdown: Array<{ costName: string; original: number; agreed: number }> = [];
-    let overallLevelTotal = 0;
-
-    if (costViewData?.overall_additional_costs) {
-      costViewData.overall_additional_costs.forEach(ac => {
-        // Handle both old format (calculated_amount/quoted_amount) and new format (cost_total)
-        const original = ac.calculated_amount ?? ac.cost_total ?? 0;
-        const agreed = ac.quoted_amount ?? ac.cost_total ?? 0;
-        overallBreakdown.push({
-          costName: ac.cost_name,
-          original,
-          agreed
+    if (bomDetailData?.bom_instances) {
+      bomDetailData.bom_instances.forEach(instance => {
+        instance.hierarchy.forEach(level => {
+          level.recurring_costs.forEach(rc => {
+            const existing = bomCostBreakdown.get(rc.cost_name) || {
+              costName: rc.cost_name, total: 0,
+              isCalculated: rc.is_calculated,
+              costCategory: rc.cost_category,
+              isHiddenFromCustomer: rc.is_hidden_from_customer,
+            };
+            existing.total += rc.quoted_amount;
+            bomCostBreakdown.set(rc.cost_name, existing);
+          });
+          bomLevelTotal += level.total_bom_ac_quoted;
         });
-        overallLevelTotal += agreed;
       });
     }
+
+    const bomLevel = {
+      total: bomLevelTotal,
+      percentOfQuote: totalQuoteValue > 0 ? (bomLevelTotal / totalQuoteValue) * 100 : 0,
+      breakdown: Array.from(bomCostBreakdown.values())
+        .sort((a, b) => {
+          if (a.isCalculated !== b.isCalculated) return a.isCalculated ? -1 : 1;
+          return b.total - a.total;
+        })
+    };
+
+    // Overall Level AC - from overallACData (separate API, has is_calculated)
+    const overallBreakdown: ACBreakdownEntry[] = [];
+    let overallLevelTotal = 0;
+
+    if (overallACData?.overall_additional_costs) {
+      const allCosts = [
+        ...(overallACData.overall_additional_costs.included_in_total?.costs || []),
+        ...(overallACData.overall_additional_costs.display_only?.costs || []),
+      ];
+      allCosts.forEach(ac => {
+        overallBreakdown.push({
+          costName: ac.cost_name,
+          total: ac.quoted_amount,
+          isCalculated: ac.is_calculated,
+          costCategory: ac.cost_category,
+          isHiddenFromCustomer: ac.is_hidden_from_customer,
+        });
+        if (ac.is_calculated) {
+          overallLevelTotal += ac.quoted_amount;
+        }
+      });
+    } else if (costViewData?.overall_additional_costs) {
+      costViewData.overall_additional_costs.forEach(ac => {
+        overallBreakdown.push({
+          costName: ac.cost_name,
+          total: ac.cost_total,
+          isCalculated: true,
+        });
+        overallLevelTotal += ac.cost_total;
+      });
+    }
+
+    overallBreakdown.sort((a, b) => {
+      if (a.isCalculated !== b.isCalculated) return a.isCalculated ? -1 : 1;
+      return b.total - a.total;
+    });
 
     const overallLevel = {
       total: overallLevelTotal,
@@ -271,7 +454,6 @@ export default function SummaryTab({
       breakdown: overallBreakdown
     };
 
-    // Total
     const totalAdditionalCosts = itemLevelTotal + bomLevelTotal + overallLevelTotal;
 
     return {
@@ -281,7 +463,7 @@ export default function SummaryTab({
       bomLevel,
       overallLevel
     };
-  }, [costViewData, bomBreakdown, totalQuoteValue]);
+  }, [costViewData, bomDetailData, overallACData, totalQuoteValue]);
 
   return (
     <div className="space-y-6">
@@ -540,7 +722,7 @@ export default function SummaryTab({
         </CardContent>
       </Card>
 
-      {/* Section 5: Additional Costs - Detailed Breakdown */}
+      {/* Section 5: Additional Costs - Accordion Breakdown */}
       <Card className="border-gray-300">
         <CardContent className="p-6">
           <div className="flex justify-between items-center mb-4">
@@ -552,119 +734,48 @@ export default function SummaryTab({
             </div>
           </div>
 
-          <div className="space-y-6">
-            {/* Item Level Additional Costs */}
-            <div className="border-l-4 border-blue-500 pl-4">
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h4 className="font-bold text-gray-900">Item Level Additional Costs</h4>
-                  <p className="text-xs text-gray-600">Costs added at individual item level</p>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.itemLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCostsData.itemLevel.percentOfQuote.toFixed(2)}% of quote</div>
-                  <button
-                    onClick={() => navigateToTab('items', { targetView: 'additional-costs' })}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
-                  >
-                    View Additional Costs →
-                  </button>
-                </div>
-              </div>
-              {additionalCostsData.itemLevel.breakdown.length > 0 && (
-                <div className="grid grid-cols-3 gap-3">
-                  {additionalCostsData.itemLevel.breakdown.map((ac) => (
-                    <div key={ac.costName} className="bg-gray-50 p-3 rounded">
-                      <div className="text-xs text-gray-600">{ac.costName}</div>
-                      <div className="text-lg font-bold text-gray-900">{currencySymbol}{ac.total.toLocaleString()}</div>
-                      <div className="text-xs text-gray-600">{ac.count} items</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+          <div className="space-y-3">
+            {/* Item Level Accordion */}
+            <ACAccordion
+              title="Item Level Additional Costs"
+              subtitle="Costs added at individual item level"
+              total={additionalCostsData.itemLevel.total}
+              percentOfQuote={additionalCostsData.itemLevel.percentOfQuote}
+              breakdown={additionalCostsData.itemLevel.breakdown}
+              currencySymbol={currencySymbol}
+              borderColor="border-blue-500"
+              bgColor="bg-blue-50"
+              onNavigate={() => navigateToTab('items', { targetView: 'additional-costs' })}
+              navigateLabel="View Additional Costs"
+            />
 
-            {/* BOM Level Additional Costs */}
-            <div className="border-l-4 border-purple-500 pl-4">
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h4 className="font-bold text-gray-900">BOM Level Additional Costs</h4>
-                  <p className="text-xs text-gray-600">Costs added at BOM level</p>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.bomLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCostsData.bomLevel.percentOfQuote.toFixed(2)}% of quote</div>
-                  <button
-                    onClick={() => navigateToTab('bom', { targetView: 'comparison' })}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
-                  >
-                    View BOM Analysis →
-                  </button>
-                </div>
-              </div>
-              {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).length > 0 && (
-                <div className="space-y-2">
-                  {bomBreakdown.filter(bom => bom.bomAdditionalCost > 0).map((bom, idx) => (
-                    <div
-                      key={`bom-additional-cost-${bom.code}-${bom.quantity || 'default'}-${idx}`}
-                      className="bg-gray-50 p-3 rounded flex justify-between items-center hover:bg-blue-50 cursor-pointer"
-                      onClick={() => navigateToTab('bom', { selectedBOM: bom.code })}
-                    >
-                      <div>
-                        <div className="font-medium text-gray-900">
-                          BOM {bom.code}
-                          {bom.quantity && <span className="ml-2 text-xs text-purple-700 bg-purple-100 px-2 py-0.5 rounded">Qty: {bom.quantity}</span>}
-                        </div>
-                        <div className="text-xs text-gray-600">{bom.name}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-bold text-gray-900">{currencySymbol}{bom.bomAdditionalCost.toLocaleString()}</div>
-                        <div className="text-xs text-gray-600">{bom.total > 0 ? ((bom.bomAdditionalCost / bom.total) * 100).toFixed(2) : 0}% of BOM total</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* BOM Level Accordion */}
+            <ACAccordion
+              title="BOM Level Additional Costs"
+              subtitle="Costs added at BOM level (all BOMs + sub-BOMs)"
+              total={additionalCostsData.bomLevel.total}
+              percentOfQuote={additionalCostsData.bomLevel.percentOfQuote}
+              breakdown={additionalCostsData.bomLevel.breakdown}
+              currencySymbol={currencySymbol}
+              borderColor="border-purple-500"
+              bgColor="bg-purple-50"
+              onNavigate={() => navigateToTab('bom', { targetView: 'comparison' })}
+              navigateLabel="View BOM Analysis"
+            />
 
-            {/* Overall Level Additional Costs */}
-            <div className="border-l-4 border-pink-500 pl-4">
-              <div className="flex justify-between items-start mb-3">
-                <div>
-                  <h4 className="font-bold text-gray-900">Overall Level Additional Costs</h4>
-                  <p className="text-xs text-gray-600">Costs added at quote level</p>
-                </div>
-                <div className="text-right">
-                  <div className="text-xl font-bold text-gray-900">{currencySymbol}{additionalCostsData.overallLevel.total.toLocaleString()}</div>
-                  <div className="text-xs text-gray-600">{additionalCostsData.overallLevel.percentOfQuote.toFixed(2)}% of quote</div>
-                  <button
-                    onClick={() => navigateToTab('overall', {})}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
-                  >
-                    View Overall Tab →
-                  </button>
-                </div>
-              </div>
-              {additionalCostsData.overallLevel.breakdown.length > 0 && (
-                <div className="grid grid-cols-2 gap-3">
-                  {additionalCostsData.overallLevel.breakdown.map((ac) => (
-                    <div key={ac.costName} className="bg-gray-50 p-3 rounded">
-                      <div className="text-xs text-gray-600">{ac.costName}</div>
-                      <div className="flex justify-between items-end mt-1">
-                        <div>
-                          <div className="text-xs text-gray-500">Original:</div>
-                          <div className="font-bold text-gray-700">{currencySymbol}{(ac.original ?? 0).toLocaleString()}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xs text-gray-500">Agreed:</div>
-                          <div className="font-bold text-gray-900">{currencySymbol}{(ac.agreed ?? 0).toLocaleString()}</div>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Overall Level Accordion */}
+            <ACAccordion
+              title="Overall Level Additional Costs"
+              subtitle="Costs added at quote level"
+              total={additionalCostsData.overallLevel.total}
+              percentOfQuote={additionalCostsData.overallLevel.percentOfQuote}
+              breakdown={additionalCostsData.overallLevel.breakdown}
+              currencySymbol={currencySymbol}
+              borderColor="border-pink-500"
+              bgColor="bg-pink-50"
+              onNavigate={() => navigateToTab('overall', {})}
+              navigateLabel="View Overall Tab"
+            />
           </div>
         </CardContent>
       </Card>

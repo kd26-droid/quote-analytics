@@ -319,7 +319,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
         category,
         items: stats.items,
         totalCost: stats.totalCost,
-        percentOfQuote: totalQuoteValue > 0 ? stats.totalCost / totalQuoteValue : 0,
+        percentOfQuote: totalQuoteValue > 0 ? (stats.totalCost / totalQuoteValue) * 100 : 0,
         avgCostPerItem: stats.items > 0 ? stats.totalCost / stats.items : 0
       }))
       .filter(c => c.items >= minItemsPerCategory);
@@ -385,7 +385,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
       category: selectedCategory,
       items: categoryItems.length,
       totalCost,
-      percentOfQuote: totalQuoteValue > 0 ? totalCost / totalQuoteValue : 0,
+      percentOfQuote: totalQuoteValue > 0 ? (totalCost / totalQuoteValue) * 100 : 0,
       avgCostPerItem: categoryItems.length > 0 ? totalCost / categoryItems.length : 0
     };
   }, [filteredItems, selectedCategory, totalQuoteValue]);
