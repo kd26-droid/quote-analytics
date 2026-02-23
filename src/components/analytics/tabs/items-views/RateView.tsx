@@ -637,7 +637,7 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
                       className={`cursor-pointer rounded-lg p-2 -mx-2 transition-all ${
                         isSelected ? 'bg-blue-100 ring-2 ring-blue-500' : 'hover:bg-gray-50'
                       }`}
-                      onClick={() => setSelectedItem(isSelected ? null : item.item_code)}
+                      onClick={() => { setSelectedItem(isSelected ? null : item.item_code); setSearchQuery(''); }}
                     >
                       <div className="flex items-center gap-2 mb-1">
                         <span className="w-5 text-xs font-bold text-gray-400">{index + 1}</span>
@@ -702,7 +702,7 @@ export default function RateView({ costViewData, currencySymbol = '₹', totalQu
                       className={`grid grid-cols-12 gap-1 py-2 px-1 rounded cursor-pointer transition-all ${
                         isSelected ? 'bg-blue-100 ring-1 ring-blue-400' : 'hover:bg-gray-50'
                       }`}
-                      onClick={() => setSelectedItem(isSelected ? null : item.item_code)}
+                      onClick={() => { setSelectedItem(isSelected ? null : item.item_code); setSearchQuery(''); }}
                     >
                       <div className="col-span-3 text-sm font-medium text-gray-900 truncate" title={item.item_code}>
                         {item.item_code}

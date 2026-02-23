@@ -567,7 +567,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
 
         <Card
           className={`border-gray-200 cursor-pointer hover:shadow-md hover:border-green-400 transition-all ${selectedCategory === insights.topCategory ? 'ring-2 ring-green-500' : ''}`}
-          onClick={() => insights.topCategory !== '-' && setSelectedCategory(insights.topCategory)}
+          onClick={() => { if (insights.topCategory !== '-') { setSelectedCategory(insights.topCategory); setTableSearch(''); } }}
         >
           <CardContent className="p-5">
             <div className="text-sm font-bold text-gray-700 mb-2">Top Category</div>
@@ -662,7 +662,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
                         <div
                           key={cat.category}
                           className="flex items-center gap-3 cursor-pointer rounded-lg p-1 -mx-1 transition-all hover:bg-gray-50"
-                          onClick={() => setSelectedCategory(cat.category)}
+                          onClick={() => { setSelectedCategory(cat.category); setTableSearch(''); }}
                           title="Click to view items in this category"
                         >
                           <div className="w-6 text-sm font-bold text-gray-500">{index + 1}</div>
@@ -773,7 +773,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
                         <div
                           key={cat.category}
                           className="flex items-center gap-3 cursor-pointer rounded p-1 -mx-1 hover:bg-gray-50"
-                          onClick={() => setSelectedCategory(cat.category)}
+                          onClick={() => { setSelectedCategory(cat.category); setTableSearch(''); }}
                           title="Click to view items in this category"
                         >
                           <div
@@ -1263,7 +1263,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
                     <tr
                       key={cat.category}
                       className="border-b border-gray-200 hover:bg-blue-50 cursor-pointer transition-colors"
-                      onClick={() => setSelectedCategory(cat.category)}
+                      onClick={() => { setSelectedCategory(cat.category); setTableSearch(''); }}
                       title="Click to view items in this category"
                     >
                       <td className="px-3 py-2 text-gray-600 border-r border-gray-200 text-sm">{(currentPage - 1) * pageSize + idx + 1}</td>

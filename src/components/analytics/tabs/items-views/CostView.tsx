@@ -855,10 +855,13 @@ export default function CostView({
           className={`border-gray-200 cursor-pointer transition-all hover:shadow-md hover:border-green-400 ${selectedItemCode === highestCostItem?.item_code ? 'ring-2 ring-green-500 border-green-500' : ''}`}
           onClick={() => {
             if (selectedItemCode === highestCostItem?.item_code) {
-              setSelectedItemCode(null); // Toggle off
+              setSelectedItemCode(null);
             } else if (highestCostItem) {
               setSelectedItemCode(highestCostItem.item_code);
             }
+            // Clear chart selections to avoid filter stacking
+            setChartSelectedItem(null);
+            setChartSelectedBOM(null);
           }}
         >
           <CardContent className="p-5">
@@ -939,7 +942,7 @@ export default function CostView({
               </p>
 
               {/* Data Table instead of just chart */}
-              <div className="space-y-2" key={`items-${chartSelectedItem || 'none'}`}>
+              <div className="space-y-2" key={`items-${chartSelectedItem || 'none'}-${selectedItemCode || 'none'}-${tableSearch}`}>
                 {costDistributionData.map((item, index) => {
                   const maxCost = costDistributionData[0]?.cost || 1;
                   const widthPercent = (item.cost / maxCost) * 100;
@@ -947,7 +950,7 @@ export default function CostView({
                   const isSelected = chartSelectedItem !== null && chartSelectedItem === item.name;
                   return (
                     <div
-                      key={`${item.name}-${chartSelectedItem || 'none'}`}
+                      key={`${item.name}-${index}`}
                       className={`flex items-center gap-3 cursor-pointer rounded-lg p-1 -mx-1 transition-all ${
                         isSelected ? 'bg-blue-50 ring-2 ring-blue-500' : 'hover:bg-gray-50'
                       }`}
@@ -1003,7 +1006,7 @@ export default function CostView({
               </p>
 
               {/* Data Table with visual bars */}
-              <div className="space-y-2" key={`boms-${chartSelectedBOM || 'none'}`}>
+              <div className="space-y-2" key={`boms-${chartSelectedBOM || 'none'}-${selectedItemCode || 'none'}-${tableSearch}`}>
                 {bomBreakdownData.map((bom, index) => {
                   const maxVal = bomBreakdownData[0]?.value || 1;
                   const widthPercent = (bom.value / maxVal) * 100;
@@ -1011,7 +1014,7 @@ export default function CostView({
                   const isSelected = chartSelectedBOM !== null && chartSelectedBOM === bom.name;
                   return (
                     <div
-                      key={`${bom.name}-${chartSelectedBOM || 'none'}`}
+                      key={`${bom.name}-${index}`}
                       className={`flex items-center gap-3 cursor-pointer rounded-lg p-1 -mx-1 transition-all ${
                         isSelected ? 'bg-blue-50 ring-2 ring-blue-500' : 'hover:bg-gray-50'
                       }`}

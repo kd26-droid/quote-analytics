@@ -518,7 +518,7 @@ export default function BOMAdditionalCostsView({
                 const width = (val / maxVal) * 100;
                 const hasDiff = Math.abs(item.diff) > 0.01;
                 return (
-                  <div key={item.name} className="cursor-pointer rounded-lg p-2 -mx-2 hover:bg-gray-50" onClick={() => setSelectedACTypes([item.name])}>
+                  <div key={item.name} className="cursor-pointer rounded-lg p-2 -mx-2 hover:bg-gray-50" onClick={() => { setSelectedACTypes([item.name]); setSearchQuery(''); }}>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-sm font-medium text-gray-900 truncate flex-1" title={item.name}>
                         {item.name}
