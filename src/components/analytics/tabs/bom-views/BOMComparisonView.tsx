@@ -30,12 +30,14 @@ interface BOMNode {
   level: number;
   items: any[];
   children: BOMNode[];
-  totalCost: number;
+  totalCost: number;         // quoted total (items + quoted AC)
+  totalCostCalc: number;     // calculated total (items + calculated AC)
   itemsSubtotal: number;
-  bomAC: number;
+  bomAC: number;             // quoted BOM AC
+  bomACCalc: number;         // calculated BOM AC
   parentBomCode: string;
   bomQuantity: number;
-  hierarchyPath?: string; // Full path like "QAB1 > QASB1 > QASSB1"
+  hierarchyPath?: string;
 }
 
 // Helper to get level label (uses imported BOM_LEVEL_LABELS)
@@ -69,6 +71,7 @@ export default function BOMComparisonView({
   const [searchQuery, setSearchQuery] = useState('');
 
   // UI state
+  const [costMode, setCostMode] = useState<'quoted' | 'calculated'>('quoted');
   const [chartViewMode, setChartViewMode] = useState<'cost' | 'ac'>('cost');
   const [sortColumn, setSortColumn] = useState<string>('hierarchy'); // Default: hierarchy order
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
@@ -201,11 +204,15 @@ export default function BOMComparisonView({
 
         // Use correct API fields:
         // - Items Subtotal = total_item_cost (sum of item costs in this BOM)
-        // - BOM AC = total_bom_ac_quoted (ONLY BOM-level additional costs, NOT including items)
-        // - BOM Total = total_quoted_amount (items + BOM AC)
+        // - BOM AC Quoted = total_bom_ac_quoted (agreed/negotiated BOM-level AC)
+        // - BOM AC Calculated = total_bom_ac_calculated (system-computed BOM-level AC)
+        // - BOM Total Quoted = total_quoted_amount (items + quoted AC)
+        // - BOM Total Calculated = total_calculated_amount (items + calculated AC)
         const itemsSubtotal = bomLevel.total_item_cost;
         const bomAC = bomLevel.total_bom_ac_quoted;
+        const bomACCalc = bomLevel.total_bom_ac_calculated;
         const totalCost = bomLevel.total_quoted_amount;
+        const totalCostCalc = bomLevel.total_calculated_amount;
 
         const node: BOMNode = {
           path: bomLevel.bom_path,
@@ -215,8 +222,10 @@ export default function BOMComparisonView({
           items: itemsData.items,
           children: [],
           totalCost: totalCost,
+          totalCostCalc: totalCostCalc,
           itemsSubtotal: itemsSubtotal,
           bomAC: bomAC,
+          bomACCalc: bomACCalc,
           parentBomCode: bomLevel.parent_bom_code || '',
           bomQuantity: bomLevel.bom_quantity,
           hierarchyPath: bomLevel.bom_path
@@ -390,21 +399,26 @@ export default function BOMComparisonView({
           bVal = b.itemsSubtotal;
           break;
         case 'bom_ac':
-          aVal = a.bomAC;
-          bVal = b.bomAC;
+          aVal = costMode === 'quoted' ? a.bomAC : a.bomACCalc;
+          bVal = costMode === 'quoted' ? b.bomAC : b.bomACCalc;
           break;
-        case 'ac_impact':
-          aVal = a.totalCost > 0 ? (a.bomAC / a.totalCost) * 100 : 0;
-          bVal = b.totalCost > 0 ? (b.bomAC / b.totalCost) * 100 : 0;
+        case 'ac_impact': {
+          const aTot = costMode === 'quoted' ? a.totalCost : a.totalCostCalc;
+          const bTot = costMode === 'quoted' ? b.totalCost : b.totalCostCalc;
+          const aAC = costMode === 'quoted' ? a.bomAC : a.bomACCalc;
+          const bAC = costMode === 'quoted' ? b.bomAC : b.bomACCalc;
+          aVal = aTot > 0 ? (aAC / aTot) * 100 : 0;
+          bVal = bTot > 0 ? (bAC / bTot) * 100 : 0;
           break;
+        }
         case 'bom_total':
         case 'totalCost':
-          aVal = a.totalCost;
-          bVal = b.totalCost;
+          aVal = costMode === 'quoted' ? a.totalCost : a.totalCostCalc;
+          bVal = costMode === 'quoted' ? b.totalCost : b.totalCostCalc;
           break;
         case 'percent_quote':
-          aVal = (a.totalCost / totalQuoteValue) * 100;
-          bVal = (b.totalCost / totalQuoteValue) * 100;
+          aVal = ((costMode === 'quoted' ? a.totalCost : a.totalCostCalc) / totalQuoteValue) * 100;
+          bVal = ((costMode === 'quoted' ? b.totalCost : b.totalCostCalc) / totalQuoteValue) * 100;
           break;
         default:
           // Default to hierarchy order
@@ -431,37 +445,57 @@ export default function BOMComparisonView({
   const insights = useMemo(() => {
     // Always use allBOMNodes level 0 for stable totals
     const allMainBOMs = allBOMNodes.filter(n => n.level === 0);
-    const totalBOMCost = allMainBOMs.reduce((sum, node) => sum + node.totalCost, 0);
     const totalItemsCost = allMainBOMs.reduce((sum, node) => sum + node.itemsSubtotal, 0);
-    const totalBOMAC = allMainBOMs.reduce((sum, node) => sum + node.bomAC, 0);
+    // Quoted
+    const totalBOMCostQuoted = allMainBOMs.reduce((sum, node) => sum + node.totalCost, 0);
+    const totalBOMACQuoted = allMainBOMs.reduce((sum, node) => sum + node.bomAC, 0);
+    // Calculated
+    const totalBOMCostCalc = allMainBOMs.reduce((sum, node) => sum + node.totalCostCalc, 0);
+    const totalBOMACCalc = allMainBOMs.reduce((sum, node) => sum + node.bomACCalc, 0);
 
     // Count by level from allBOMNodes for stable counts
     const mainBOMs = allMainBOMs.length;
     const subBOMs = allBOMNodes.filter(n => n.level === 1).length;
     const subSubBOMs = allBOMNodes.filter(n => n.level >= 2).length;
 
+    // Active values based on costMode
+    const totalBOMCost = costMode === 'quoted' ? totalBOMCostQuoted : totalBOMCostCalc;
+    const totalBOMAC = costMode === 'quoted' ? totalBOMACQuoted : totalBOMACCalc;
+    const hasDifferences = Math.abs(totalBOMACQuoted - totalBOMACCalc) > 0.01;
+
     return {
       totalBOMCost,
       totalItemsCost,
       totalBOMAC,
+      totalBOMCostQuoted,
+      totalBOMCostCalc,
+      totalBOMACQuoted,
+      totalBOMACCalc,
+      hasDifferences,
       bomCount: allBOMNodes.length,
       mainBOMs,
       subBOMs,
       subSubBOMs
     };
-  }, [allBOMNodes]);
+  }, [allBOMNodes, costMode]);
 
   // Chart data - always show all BOMs in hierarchy order for stability
   // Filters only affect the table, not the charts
   const chartData = useMemo(() => {
-    // Always use allBOMNodes for stable charts
-    return allBOMNodes.slice(0, 10).map((node, index) => ({
-      ...node,
-      itemCount: bomItemCounts.get(node.path) || 0,
-      acPercentOfBOM: node.totalCost > 0 ? (node.bomAC / node.totalCost) * 100 : 0,
-      color: COLORS[index % COLORS.length]
-    }));
-  }, [allBOMNodes, bomItemCounts]);
+    // Always use allBOMNodes for stable charts — respect costMode
+    return allBOMNodes.slice(0, 10).map((node, index) => {
+      const ac = costMode === 'quoted' ? node.bomAC : node.bomACCalc;
+      const total = costMode === 'quoted' ? node.totalCost : node.totalCostCalc;
+      return {
+        ...node,
+        activeBomAC: ac,
+        activeTotalCost: total,
+        itemCount: bomItemCounts.get(node.path) || 0,
+        acPercentOfBOM: total > 0 ? (ac / total) * 100 : 0,
+        color: COLORS[index % COLORS.length]
+      };
+    });
+  }, [allBOMNodes, bomItemCounts, costMode]);
 
   // Check if filters are active
   const hasActiveFilters = bomFilter.selectedEntryId !== null ||
@@ -591,6 +625,37 @@ export default function BOMComparisonView({
         </div>
       )}
 
+      {/* Calculated / Quoted Toggle */}
+      {insights.hasDifferences && (
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-medium text-gray-600">Show values as:</span>
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
+            <button
+              onClick={() => setCostMode('quoted')}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                costMode === 'quoted' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Quoted
+            </button>
+            <button
+              onClick={() => setCostMode('calculated')}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md transition-colors ${
+                costMode === 'calculated' ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              Calculated
+            </button>
+          </div>
+          {costMode === 'quoted' && (
+            <span className="text-xs text-gray-400">Agreed/negotiated values (may include manual overrides)</span>
+          )}
+          {costMode === 'calculated' && (
+            <span className="text-xs text-gray-400">System-computed values from formulas</span>
+          )}
+        </div>
+      )}
+
       {/* Key Metrics Cards - 4 cards */}
       <div className="grid grid-cols-4 gap-4">
         <Card className="border-gray-200">
@@ -600,6 +665,11 @@ export default function BOMComparisonView({
             <div className="text-xs text-gray-500 mt-2">
               Items: {currencySymbol}{insights.totalItemsCost.toLocaleString()} + AC: {currencySymbol}{insights.totalBOMAC.toLocaleString()}
             </div>
+            {insights.hasDifferences && costMode === 'quoted' && (
+              <div className="text-[10px] text-gray-400 mt-1">
+                Calculated: {currencySymbol}{insights.totalBOMCostCalc.toLocaleString()}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -610,6 +680,11 @@ export default function BOMComparisonView({
             <div className="text-xs text-gray-500 mt-2">
               {((insights.totalBOMAC / (insights.totalBOMCost || 1)) * 100).toFixed(1)}% of total cost
             </div>
+            {insights.hasDifferences && costMode === 'quoted' && (
+              <div className="text-[10px] text-gray-400 mt-1">
+                Calculated: {currencySymbol}{insights.totalBOMACCalc.toLocaleString()}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -688,8 +763,8 @@ export default function BOMComparisonView({
 
               <div className="space-y-2">
                 {chartData.map((node, index) => {
-                  const maxVal = chartData[0] ? (chartViewMode === 'cost' ? chartData[0].totalCost : chartData[0].bomAC) : 1;
-                  const currentVal = chartViewMode === 'cost' ? node.totalCost : node.bomAC;
+                  const maxVal = chartData[0] ? (chartViewMode === 'cost' ? chartData[0].activeTotalCost : chartData[0].activeBomAC) : 1;
+                  const currentVal = chartViewMode === 'cost' ? node.activeTotalCost : node.activeBomAC;
                   const widthPercent = maxVal > 0 ? (currentVal / maxVal) * 100 : 0;
                   const isSelected = bomFilter.isNodeVisibleByPath(node.path) && bomFilter.selectedEntryId !== null;
 
@@ -754,10 +829,10 @@ export default function BOMComparisonView({
                 {availableLevels.map((level, index) => {
                   // Use filteredNodes to show level data based on current filter
                   const levelNodes = filteredNodes.filter(n => n.level === level);
-                  const levelCost = levelNodes.reduce((sum, n) => sum + n.totalCost, 0);
-                  const levelAC = levelNodes.reduce((sum, n) => sum + n.bomAC, 0);
+                  const levelCost = levelNodes.reduce((sum, n) => sum + (costMode === 'quoted' ? n.totalCost : n.totalCostCalc), 0);
+                  const levelAC = levelNodes.reduce((sum, n) => sum + (costMode === 'quoted' ? n.bomAC : n.bomACCalc), 0);
                   const maxCost = Math.max(...availableLevels.map(l =>
-                    filteredNodes.filter(n => n.level === l).reduce((sum, n) => sum + n.totalCost, 0)
+                    filteredNodes.filter(n => n.level === l).reduce((sum, n) => sum + (costMode === 'quoted' ? n.totalCost : n.totalCostCalc), 0)
                   ), 1);
                   const widthPercent = maxCost > 0 ? (levelCost / maxCost) * 100 : 0;
 
@@ -1109,8 +1184,12 @@ export default function BOMComparisonView({
                   const isExpanded = expandedBOMs.has(node.path);
                   const hasChildren = node.children.length > 0;
                   const itemCount = bomItemCounts.get(node.path) || 0;
+                  // Use quoted or calculated values based on costMode
+                  const activeBomAC = costMode === 'quoted' ? node.bomAC : node.bomACCalc;
+                  const activeTotalCost = costMode === 'quoted' ? node.totalCost : node.totalCostCalc;
+                  const hasOverride = Math.abs(node.bomAC - node.bomACCalc) > 0.01;
                   // AC % of BOM = what % of BOM total cost is additional costs
-                  const acPercentOfBOM = node.totalCost > 0 ? (node.bomAC / node.totalCost) * 100 : 0;
+                  const acPercentOfBOM = activeTotalCost > 0 ? (activeBomAC / activeTotalCost) * 100 : 0;
                   const indent = node.level * 20;
 
                   return (
@@ -1205,16 +1284,21 @@ export default function BOMComparisonView({
 
                       {visibleColumns.has('bom_ac') && (
                         <td className="px-3 py-2.5 text-right font-mono text-gray-900 border-r border-gray-200 text-sm">
-                          {node.bomAC > 0 ? (
-                            <button
-                              onClick={() => {
-                                setSelectedView('additional-costs');
-                                navigateToTab('bom', { selectedBOM: node.parentBomCode });
-                              }}
-                              className="hover:underline font-semibold text-orange-600"
-                            >
-                              {currencySymbol}{node.bomAC.toLocaleString()}
-                            </button>
+                          {activeBomAC > 0 ? (
+                            <div>
+                              <button
+                                onClick={() => {
+                                  setSelectedView('additional-costs');
+                                  navigateToTab('bom', { selectedBOM: node.parentBomCode });
+                                }}
+                                className="hover:underline font-semibold text-orange-600"
+                              >
+                                {currencySymbol}{activeBomAC.toLocaleString()}
+                              </button>
+                              {hasOverride && (
+                                <span className="ml-1 text-[10px] text-amber-500" title={`Calculated: ${currencySymbol}${node.bomACCalc.toLocaleString()} | Quoted: ${currencySymbol}${node.bomAC.toLocaleString()}`}>*</span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-gray-400">-</span>
                           )}
@@ -1237,13 +1321,13 @@ export default function BOMComparisonView({
 
                       {visibleColumns.has('bom_total') && (
                         <td className="px-3 py-2.5 text-right font-mono font-bold text-gray-900 border-r border-gray-200 text-sm">
-                          {currencySymbol}{node.totalCost.toLocaleString()}
+                          {currencySymbol}{activeTotalCost.toLocaleString()}
                         </td>
                       )}
 
                       {visibleColumns.has('percent_quote') && (
                         <td className="px-3 py-2.5 text-right text-gray-600 text-sm font-semibold">
-                          {((node.totalCost / totalQuoteValue) * 100).toFixed(1)}%
+                          {((activeTotalCost / totalQuoteValue) * 100).toFixed(1)}%
                         </td>
                       )}
                     </tr>

@@ -439,6 +439,11 @@ function BOMItemRow({ item }: { item: ProjectDeltaBOMItem }) {
       <td className="px-4 py-1.5 text-gray-700" style={{ paddingLeft: `${16 + indent}px` }}>
         <span className="font-mono text-gray-800">{item.item_code || '—'}</span>
         {item.item_name && <span className="text-gray-500 ml-2">{item.item_name}</span>}
+        {item.is_alternate && (
+          <span className="ml-2 inline-flex items-center gap-1 text-[10px] font-medium text-violet-600 bg-violet-50 px-1.5 py-0.5 rounded" title={item.alternate_of ? `Alternate of ${item.alternate_of}` : 'Alternate item'}>
+            ALT{item.alternate_of ? ` of ${item.alternate_of}` : ''}
+          </span>
+        )}
       </td>
       <td className="px-4 py-1.5 text-right font-mono text-gray-700">{item.project_quantity}</td>
       <td className="px-4 py-1.5 text-right font-mono">

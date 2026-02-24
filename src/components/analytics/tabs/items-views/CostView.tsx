@@ -74,11 +74,12 @@ export default function CostView({
   const [chartViewMode, setChartViewMode] = useState<'total' | 'base'>('total');
   const [chartSelectedItem, setChartSelectedItem] = useState<string | null>(null);
   const [chartSelectedBOM, setChartSelectedBOM] = useState<string | null>(null);
+  const [openACPopup, setOpenACPopup] = useState<string | null>(null);
 
   // Column visibility
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set([
     'item_code', 'item_name', 'tags', 'vendor_name', 'bom_path', 'item_source',
-    'quantity', 'base_rate', 'quoted_rate', 'total_additional_cost', 'total_amount', 'percent_of_quote'
+    'quantity', 'unit', 'base_rate', 'quoted_rate', 'total_additional_cost', 'total_amount', 'percent_of_quote'
   ]));
 
 
@@ -147,11 +148,20 @@ export default function CostView({
       { key: 'bom_path', label: 'BOM', align: 'left' },
       { key: 'item_source', label: 'Source', align: 'center' },
       { key: 'quantity', label: 'Qty', align: 'right' },
-      { key: 'base_rate', label: 'Base Rate', align: 'right' },
-      { key: 'quoted_rate', label: 'Quoted Rate', align: 'right' },
-      { key: 'total_additional_cost', label: 'Item AC', align: 'right' },
-      { key: 'total_amount', label: 'Total', align: 'right' },
+      { key: 'unit', label: 'UOM', align: 'left' },
+      { key: 'base_rate', label: 'Quoted Base Rate', align: 'right' },
+      { key: 'quoted_rate', label: 'Landed Rate', align: 'right' },
+      { key: 'total_additional_cost', label: 'Total Item AC', align: 'right' },
+      { key: 'total_amount', label: 'Total Item Cost', align: 'right' },
       { key: 'percent_of_quote', label: '% Quote', align: 'right' },
+      { key: 'erp_code', label: 'ERP Code', align: 'left' },
+      { key: 'cpn_code', label: 'CPN Code', align: 'left' },
+      { key: 'mpn_code', label: 'MPN Code', align: 'left' },
+      { key: 'hsn_code', label: 'HSN Code', align: 'left' },
+      { key: 'custom_ids', label: 'Custom IDs', align: 'left' },
+      { key: 'template_fields', label: 'Template Fields', align: 'left' },
+      { key: 'notes', label: 'Notes', align: 'left' },
+      { key: 'internal_notes', label: 'Internal Notes', align: 'left' },
     ];
 
     const attrCols = attributeList.map(specName => ({
@@ -213,6 +223,9 @@ export default function CostView({
       const target = e.target as HTMLElement;
       if (!target.closest('.filter-dropdown')) {
         setOpenDropdown(null);
+      }
+      if (!target.closest('.ac-popup')) {
+        setOpenACPopup(null);
       }
     };
     document.addEventListener('click', handleClickOutside);
@@ -479,7 +492,13 @@ export default function CostView({
         item.bom_code.toLowerCase().includes(search) ||
         item.tags.some(tag => tag.toLowerCase().includes(search)) ||
         item.item_source.toLowerCase().includes(search) ||
-        (item.attributes || []).some(attr => attr.spec_value.toLowerCase().includes(search))
+        (item.attributes || []).some(attr => attr.spec_value.toLowerCase().includes(search)) ||
+        (item.erp_code && item.erp_code.toLowerCase().includes(search)) ||
+        (item.cpn_code && item.cpn_code.toLowerCase().includes(search)) ||
+        (item.mpn_code && item.mpn_code.toLowerCase().includes(search)) ||
+        (item.hsn_code && item.hsn_code.toLowerCase().includes(search)) ||
+        (item.custom_identifications || []).some(ci => ci.field_value.toLowerCase().includes(search)) ||
+        (item.notes && item.notes.toLowerCase().includes(search))
       );
     }
 
@@ -488,9 +507,13 @@ export default function CostView({
       result = result.filter(item => item.item_code === chartSelectedItem);
     }
 
-    // Apply chart BOM selection filter
+    // Apply chart BOM selection filter — matches root BOM (inclusive of sub-BOMs)
     if (chartSelectedBOM) {
-      result = result.filter(item => item.bom_code === chartSelectedBOM);
+      result = result.filter(item => {
+        const bomPath = item.bom_path || item.bom_code || '';
+        const rootBOM = bomPath.split(' > ')[0];
+        return rootBOM === chartSelectedBOM;
+      });
     }
 
     // Sort based on selected column
@@ -508,6 +531,18 @@ export default function CostView({
       if (sortColumn === 'percent_of_quote') {
         aVal = a.percent_of_quote;
         bVal = b.percent_of_quote;
+      }
+
+      // Handle custom_ids (sort by first custom ID value)
+      if (sortColumn === 'custom_ids') {
+        aVal = (a.custom_identifications || [])[0]?.field_value || '';
+        bVal = (b.custom_identifications || [])[0]?.field_value || '';
+      }
+
+      // Handle template_fields (sort by first template field value)
+      if (sortColumn === 'template_fields') {
+        aVal = (a.template_fields || [])[0]?.field_value || '';
+        bVal = (b.template_fields || [])[0]?.field_value || '';
       }
 
       // Handle dynamic attribute columns
@@ -547,15 +582,21 @@ export default function CostView({
     setCurrentPage(1);
   }, [selectedBOMInstances, selectedBOMs, selectedVendors, selectedTags, costRange, selectedItemCode, tableSearch, chartSelectedItem, chartSelectedBOM, sortColumn, sortDirection, pageSize]);
 
-  // Handle column header click for sorting
+  // Handle column header click for sorting (3rd click resets to default)
   const handleSort = (column: string) => {
     if (sortColumn === column) {
-      // Toggle direction if same column
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+      if (sortDirection === 'desc') {
+        // First click was desc → go asc
+        setSortDirection('asc');
+      } else {
+        // Second click was asc → reset sort
+        setSortColumn('total_amount');
+        setSortDirection('desc');
+      }
     } else {
       // New column - default to descending for numbers, ascending for text
       setSortColumn(column);
-      const textColumns = ['item_code', 'item_name', 'vendor_name', 'bom_path', 'bom_code', 'tags', 'item_source', 'unit'];
+      const textColumns = ['item_code', 'item_name', 'vendor_name', 'bom_path', 'bom_code', 'tags', 'item_source', 'unit', 'erp_code', 'cpn_code', 'mpn_code', 'hsn_code', 'custom_ids', 'template_fields', 'notes', 'internal_notes'];
       setSortDirection(textColumns.includes(column) ? 'asc' : 'desc');
     }
   };
@@ -563,11 +604,11 @@ export default function CostView({
   // Render sort indicator
   const renderSortIndicator = (column: string) => {
     if (sortColumn !== column) {
-      return <span className="text-gray-400 ml-1 text-[10px]">sort</span>;
+      return <span className="text-gray-400 ml-1 text-[10px]">↕</span>;
     }
     return sortDirection === 'asc'
-      ? <span className="text-blue-600 ml-1 text-[10px] font-bold">ASC</span>
-      : <span className="text-blue-600 ml-1 text-[10px] font-bold">DESC</span>;
+      ? <span className="text-blue-600 ml-1 text-[10px] font-bold">↑</span>
+      : <span className="text-blue-600 ml-1 text-[10px] font-bold">↓</span>;
   };
 
   // Calculate the highest cost item from ALL items (before single item filter)
@@ -616,15 +657,16 @@ export default function CostView({
     }));
   }, [filteredItems, chartViewMode]);
 
-  // BOM breakdown data - supports both total and base rate views
+  // BOM breakdown data - groups by ROOT BOM (inclusive of all sub-BOMs)
+  // Each item rolls up to its root BOM (first segment of bom_path)
   const bomBreakdownData = useMemo(() => {
     const bomTotals = new Map<string, { total: number; base: number }>();
     filteredItems.forEach(item => {
-      // Use the last segment of bom_path for grouping (the actual BOM the item belongs to)
       const bomPath = item.bom_path || item.bom_code || 'No BOM';
-      const bomKey = bomPath.includes(' > ') ? bomPath.split(' > ').pop()! : bomPath;
-      const current = bomTotals.get(bomKey) || { total: 0, base: 0 };
-      bomTotals.set(bomKey, {
+      // Roll up to root BOM — inclusive of all children
+      const rootBOM = bomPath.split(' > ')[0];
+      const current = bomTotals.get(rootBOM) || { total: 0, base: 0 };
+      bomTotals.set(rootBOM, {
         total: current.total + item.total_amount,
         base: current.base + (item.base_rate * item.quantity)
       });
@@ -706,7 +748,7 @@ export default function CostView({
     );
   };
 
-  // Additional costs display helper - show calculated costs on hover, click for full view
+  // Additional costs display helper - click to open popup, with "View in AC View" link
   // isNearBottom: for last 4 rows, show dropdown above to prevent cutoff
   const renderAdditionalCosts = (item: CostViewItem, isNearBottom: boolean = false) => {
     if (item.additional_costs.length === 0) {
@@ -715,71 +757,88 @@ export default function CostView({
 
     const calculatedCosts = item.additional_costs.filter(ac => ac.is_calculated);
     const inputCosts = item.additional_costs.filter(ac => !ac.is_calculated);
+    const popupKey = `${item.item_id}-${item.bom_instance_id}`;
+    const isOpen = openACPopup === popupKey;
 
     return (
-      <div className="relative group">
+      <div className="relative ac-popup">
         <button
           onClick={(e) => {
             e.stopPropagation();
-            if (setSelectedView) {
-              setSelectedView('additional-costs');
-              navigateToTab('items', { selectedItem: item.item_code });
-            }
+            setOpenACPopup(isOpen ? null : popupKey);
           }}
-          className="font-mono text-sm text-orange-700 group-hover:text-orange-900 hover:underline font-semibold"
+          className="font-mono text-sm text-orange-700 hover:text-orange-900 hover:underline font-semibold"
         >
           {currencySymbol}{item.total_additional_cost.toLocaleString()}
         </button>
-        <div className={`absolute z-20 hidden group-hover:block bg-white border border-gray-300 rounded shadow-xl right-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`} style={{ minWidth: '280px' }}>
-          <div className="bg-gray-100 px-3 py-2 border-b border-gray-300 text-sm font-bold text-gray-800">
-            Additional Costs ({calculatedCosts.length} included{inputCosts.length > 0 ? `, ${inputCosts.length} input` : ''})
-          </div>
-          {/* Calculated costs — included in total */}
-          {calculatedCosts.length > 0 && (
-            <table className="w-full text-sm">
-              <tbody>
-                {calculatedCosts.map((ac, idx) => (
-                  <tr key={idx} className="border-b border-gray-100 last:border-0" title={ac.formula || undefined}>
-                    <td className="px-3 py-1.5 text-gray-800">
-                      {ac.cost_name}
-                      {ac.cost_source === 'FORMULA' && <span className="text-[10px] text-purple-500 ml-1">fx</span>}
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-mono text-xs text-gray-500">
-                      {ac.per_unit_amount.toLocaleString()}/u
-                    </td>
-                    <td className="px-3 py-1.5 text-right font-mono text-gray-900">
-                      {currencySymbol}{ac.total_amount.toLocaleString()}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-          {/* Input/reference costs — not in total */}
-          {inputCosts.length > 0 && (
-            <>
-              <div className="px-3 py-1 text-[10px] font-semibold text-gray-400 bg-gray-50 border-t border-gray-200 uppercase tracking-wider">
-                Inputs / Reference
-              </div>
+        {isOpen && (
+          <div className={`absolute z-20 bg-white border border-gray-300 rounded shadow-xl right-0 ${isNearBottom ? 'bottom-full mb-1' : 'top-full mt-1'}`} style={{ minWidth: '280px' }}>
+            <div className="bg-gray-100 px-3 py-2 border-b border-gray-300 text-sm font-bold text-gray-800 flex justify-between items-center">
+              <span>Additional Costs ({calculatedCosts.length} included{inputCosts.length > 0 ? `, ${inputCosts.length} input` : ''})</span>
+              <button onClick={(e) => { e.stopPropagation(); setOpenACPopup(null); }} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+            </div>
+            {/* Calculated costs — included in total */}
+            {calculatedCosts.length > 0 && (
               <table className="w-full text-sm">
                 <tbody>
-                  {inputCosts.map((ac, idx) => (
-                    <tr key={idx} className="border-b border-gray-100 last:border-0 text-gray-400">
-                      <td className="px-3 py-1.5">{ac.cost_name}</td>
-                      <td colSpan={2} className="px-3 py-1.5 text-right font-mono">
-                        {ac.cost_type === 'PERCENTAGE' ? `${ac.cost_value}%` : `${currencySymbol}${ac.cost_value.toLocaleString()}`}
+                  {calculatedCosts.map((ac, idx) => (
+                    <tr key={idx} className="border-b border-gray-100 last:border-0" title={ac.formula || undefined}>
+                      <td className="px-3 py-1.5 text-gray-800">
+                        {ac.cost_name}
+                        {ac.cost_source === 'FORMULA' && <span className="text-[10px] text-purple-500 ml-1">fx</span>}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-xs text-gray-500">
+                        {ac.per_unit_amount.toLocaleString()}/u
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-gray-900">
+                        {currencySymbol}{ac.total_amount.toLocaleString()}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </>
-          )}
-          <div className="bg-gray-50 px-3 py-2 border-t border-gray-300 flex justify-between text-sm font-bold">
-            <span>Total</span>
-            <span className="font-mono">{currencySymbol}{item.total_additional_cost.toLocaleString()}</span>
+            )}
+            {/* Input/reference costs — not in total */}
+            {inputCosts.length > 0 && (
+              <>
+                <div className="px-3 py-1 text-[10px] font-semibold text-gray-400 bg-gray-50 border-t border-gray-200 uppercase tracking-wider">
+                  Inputs / Reference
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {inputCosts.map((ac, idx) => (
+                      <tr key={idx} className="border-b border-gray-100 last:border-0 text-gray-400">
+                        <td className="px-3 py-1.5">{ac.cost_name}</td>
+                        <td colSpan={2} className="px-3 py-1.5 text-right font-mono">
+                          {ac.cost_type === 'PERCENTAGE' ? `${ac.cost_value}%` : `${currencySymbol}${ac.cost_value.toLocaleString()}`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </>
+            )}
+            <div className="bg-gray-50 px-3 py-2 border-t border-gray-300 flex justify-between text-sm font-bold">
+              <span>Total</span>
+              <span className="font-mono">{currencySymbol}{item.total_additional_cost.toLocaleString()}</span>
+            </div>
+            <div className="px-3 py-2 border-t border-gray-200">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenACPopup(null);
+                  if (setSelectedView) {
+                    setSelectedView('additional-costs');
+                    navigateToTab('items', { selectedItem: item.item_code });
+                  }
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                View More Costs →
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     );
   };
@@ -1763,12 +1822,20 @@ export default function CostView({
                       Qty {renderSortIndicator('quantity')}
                     </th>
                   )}
+                  {visibleColumns.has('unit') && (
+                    <th
+                      className="px-3 py-3 text-left font-bold text-gray-800 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
+                      onClick={() => handleSort('unit')}
+                    >
+                      UOM {renderSortIndicator('unit')}
+                    </th>
+                  )}
                   {visibleColumns.has('base_rate') && (
                     <th
                       className="px-3 py-3 text-right font-bold text-gray-800 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
                       onClick={() => handleSort('base_rate')}
                     >
-                      Base Rate {renderSortIndicator('base_rate')}
+                      Quoted Base Rate {renderSortIndicator('base_rate')}
                     </th>
                   )}
                   {visibleColumns.has('quoted_rate') && (
@@ -1776,16 +1843,16 @@ export default function CostView({
                       className="px-3 py-3 text-right font-bold text-gray-800 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
                       onClick={() => handleSort('quoted_rate')}
                     >
-                      Quoted Rate {renderSortIndicator('quoted_rate')}
+                      Landed Rate {renderSortIndicator('quoted_rate')}
                     </th>
                   )}
                   {visibleColumns.has('total_additional_cost') && (
                     <th
                       className="px-3 py-3 text-right font-bold text-gray-800 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
                       onClick={() => handleSort('total_additional_cost')}
-                      title="Item Additional Costs (Total)"
+                      title="Total Item Additional Costs"
                     >
-                      Item AC {renderSortIndicator('total_additional_cost')}
+                      Total Item AC {renderSortIndicator('total_additional_cost')}
                     </th>
                   )}
                   {visibleColumns.has('total_amount') && (
@@ -1793,7 +1860,7 @@ export default function CostView({
                       className="px-3 py-3 text-right font-bold text-gray-800 border-r border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none"
                       onClick={() => handleSort('total_amount')}
                     >
-                      Total {renderSortIndicator('total_amount')}
+                      Total Item Cost {renderSortIndicator('total_amount')}
                     </th>
                   )}
                   {visibleColumns.has('percent_of_quote') && (
@@ -1802,6 +1869,47 @@ export default function CostView({
                       onClick={() => handleSort('percent_of_quote')}
                     >
                       % Quote {renderSortIndicator('percent_of_quote')}
+                    </th>
+                  )}
+                  {/* New metadata columns */}
+                  {visibleColumns.has('erp_code') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('erp_code')}>
+                      ERP Code {renderSortIndicator('erp_code')}
+                    </th>
+                  )}
+                  {visibleColumns.has('cpn_code') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('cpn_code')}>
+                      CPN Code {renderSortIndicator('cpn_code')}
+                    </th>
+                  )}
+                  {visibleColumns.has('mpn_code') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('mpn_code')}>
+                      MPN Code {renderSortIndicator('mpn_code')}
+                    </th>
+                  )}
+                  {visibleColumns.has('hsn_code') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('hsn_code')}>
+                      HSN Code {renderSortIndicator('hsn_code')}
+                    </th>
+                  )}
+                  {visibleColumns.has('custom_ids') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('custom_ids')}>
+                      Custom IDs {renderSortIndicator('custom_ids')}
+                    </th>
+                  )}
+                  {visibleColumns.has('template_fields') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('template_fields')}>
+                      Template Fields {renderSortIndicator('template_fields')}
+                    </th>
+                  )}
+                  {visibleColumns.has('notes') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('notes')}>
+                      Notes {renderSortIndicator('notes')}
+                    </th>
+                  )}
+                  {visibleColumns.has('internal_notes') && (
+                    <th className="px-3 py-3 text-left font-bold text-gray-800 border-l border-gray-300 text-sm cursor-pointer hover:bg-gray-200 select-none" onClick={() => handleSort('internal_notes')}>
+                      Internal Notes {renderSortIndicator('internal_notes')}
                     </th>
                   )}
                   {/* Dynamic attribute columns */}
@@ -1888,7 +1996,12 @@ export default function CostView({
                     )}
                     {visibleColumns.has('quantity') && (
                       <td className="px-3 py-2.5 text-right text-gray-900 border-r border-gray-200 text-sm">
-                        {item.quantity} {item.unit}
+                        {item.quantity}
+                      </td>
+                    )}
+                    {visibleColumns.has('unit') && (
+                      <td className="px-3 py-2.5 text-left text-gray-700 border-r border-gray-200 text-sm">
+                        {item.unit || '—'}
                       </td>
                     )}
                     {visibleColumns.has('base_rate') && (
@@ -1929,6 +2042,59 @@ export default function CostView({
                         title={`${item.percent_of_quote}%`}
                       >
                         {item.percent_of_quote.toFixed(2)}%
+                      </td>
+                    )}
+                    {/* New metadata cells */}
+                    {visibleColumns.has('erp_code') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm font-mono">{item.erp_code || '—'}</td>
+                    )}
+                    {visibleColumns.has('cpn_code') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm font-mono">{item.cpn_code || '—'}</td>
+                    )}
+                    {visibleColumns.has('mpn_code') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm font-mono">{item.mpn_code || '—'}</td>
+                    )}
+                    {visibleColumns.has('hsn_code') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm font-mono">{item.hsn_code || '—'}</td>
+                    )}
+                    {visibleColumns.has('custom_ids') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm max-w-[200px]">
+                        {(item.custom_identifications || []).length > 0
+                          ? (item.custom_identifications || []).map((ci, i) => (
+                              <span key={i} className="inline-block mr-1.5 mb-0.5">
+                                <span className="text-gray-400 text-xs">{ci.field_name}:</span>{' '}
+                                <span className="font-medium">{ci.field_value}</span>
+                                {i < (item.custom_identifications || []).length - 1 && <span className="text-gray-300 ml-1">|</span>}
+                              </span>
+                            ))
+                          : '—'}
+                      </td>
+                    )}
+                    {visibleColumns.has('template_fields') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm max-w-[250px]">
+                        {(item.template_fields || []).length > 0
+                          ? <div className="space-y-0.5">
+                              {(item.template_fields || []).slice(0, 3).map((tf, i) => (
+                                <div key={i} className="text-xs">
+                                  <span className="text-gray-400">{tf.field_name}:</span>{' '}
+                                  <span className="font-medium">{tf.field_type === 'BOOLEAN' ? (tf.field_value === 'true' ? 'Yes' : 'No') : tf.field_value || '—'}</span>
+                                </div>
+                              ))}
+                              {(item.template_fields || []).length > 3 && (
+                                <span className="text-[10px] text-gray-400">+{(item.template_fields || []).length - 3} more</span>
+                              )}
+                            </div>
+                          : '—'}
+                      </td>
+                    )}
+                    {visibleColumns.has('notes') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm max-w-[200px] truncate" title={item.notes || undefined}>
+                        {item.notes || '—'}
+                      </td>
+                    )}
+                    {visibleColumns.has('internal_notes') && (
+                      <td className="px-3 py-2.5 text-gray-700 border-l border-gray-200 text-sm max-w-[200px] truncate" title={item.internal_notes || undefined}>
+                        {item.internal_notes || '—'}
                       </td>
                     )}
                     {/* Dynamic attribute cells */}

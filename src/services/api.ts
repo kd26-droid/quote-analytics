@@ -152,6 +152,14 @@ export interface CostViewItem {
   percent_of_quote: number;
   item_source: 'PROJECT' | 'EVENT' | 'QUOTE';
   attributes: Array<{ spec_name: string; spec_value: string }>;
+  erp_code: string | null;
+  cpn_code: string | null;
+  mpn_code: string | null;
+  hsn_code: string | null;
+  custom_identifications: Array<{ field_name: string; field_value: string }>;
+  template_fields: Array<{ field_name: string; field_value: string | null; field_type: string; section_name: string }>;
+  notes: string | null;
+  internal_notes: string | null;
 }
 
 // BOM Additional Cost
@@ -159,6 +167,7 @@ export interface BOMAdditionalCost {
   bom_code: string;
   bom_path: string;
   total_ac: number;
+  total_ac_calculated: number;
   costs: Array<{
     cost_name: string;
     cost_type: string;
@@ -247,6 +256,9 @@ export interface BOMInstance {
     bom_quantity: number;
     entry_id: string;
   };
+  total_item_cost: number;
+  total_bom_ac_calculated: number;
+  total_bom_ac_quoted: number;
   total_calculated_amount: number;
   total_quoted_amount: number;
   hierarchy: BOMLevel[];
@@ -255,6 +267,9 @@ export interface BOMInstance {
 // BOM Detail Summary
 export interface BOMDetailSummary {
   total_instances: number;
+  total_item_cost: number;
+  total_bom_ac_calculated: number;
+  total_bom_ac_quoted: number;
   total_calculated_amount: number;
   total_quoted_amount: number;
 }
@@ -482,6 +497,8 @@ export interface ProjectDeltaBOMItem {
   quote_quantity: number | null;
   status: 'MATCHED' | 'QTY_CHANGED' | 'NOT_IN_QUOTE';
   is_sub_bom_ref: boolean;
+  is_alternate?: boolean;
+  alternate_of?: string | null;
 }
 
 export interface ProjectDeltaBOMInstance {
