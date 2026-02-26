@@ -555,7 +555,7 @@ export default function VendorView({ costViewData, currencySymbol, totalQuoteVal
                   ? `Showing ${filteredItems.length} items from ${selectedVendor}`
                   : `Showing ${filteredVendorAnalysis.length} of ${vendorAnalysis.length} vendors`
                 }
-                {getBOMInstanceFilterText(bomInstances, selectedBOMInstances)}
+                {getBOMInstanceFilterText(selectedBOMInstances, bomInstances)}
                 {!selectedBOMs.includes('all') && ` • BOM: ${selectedBOMs.map(b => b.split(' > ').pop()).join(', ')}`}
                 {!selectedTags.includes('all') && ` • Category: ${selectedTags.join(', ')}`}
                 {tableSearch && ` • Search: "${tableSearch}"`}

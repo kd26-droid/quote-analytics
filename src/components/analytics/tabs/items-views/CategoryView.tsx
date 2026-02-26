@@ -62,7 +62,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
     { key: 'items', label: 'Item Count', align: 'right' },
     { key: 'totalCost', label: 'Total Cost', align: 'right' },
     { key: 'avgCostPerItem', label: 'Avg Cost/Item', align: 'right' },
-    { key: 'percentOfQuote', label: '% of Quote', align: 'right' },
+    { key: 'percentOfQuote', label: '% Share', align: 'right' },
   ];
 
   const itemColumnDefs = [
@@ -300,6 +300,7 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
   }, [items, selectedBOMInstances, selectedBOMs, selectedVendors, selectedCategories]);
 
   // Category analysis - each item can be in MULTIPLE categories
+  // Percentages are computed relative to the sum of all category costs, so they add up to 100%
   const categoryAnalysis = useMemo(() => {
     const catMap = new Map<string, { items: number; totalCost: number }>();
 
@@ -314,16 +315,24 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
       });
     });
 
-    return Array.from(catMap.entries())
+    const allCategories = Array.from(catMap.entries())
       .map(([category, stats]) => ({
         category,
         items: stats.items,
         totalCost: stats.totalCost,
-        percentOfQuote: totalQuoteValue > 0 ? (stats.totalCost / totalQuoteValue) * 100 : 0,
+        percentOfQuote: 0, // computed below
         avgCostPerItem: stats.items > 0 ? stats.totalCost / stats.items : 0
       }))
       .filter(c => c.items >= minItemsPerCategory);
-  }, [preFilteredItems, totalQuoteValue, minItemsPerCategory]);
+
+    // Compute percentages relative to total of all category costs (so they sum to 100%)
+    const totalCategoryCost = allCategories.reduce((sum, c) => sum + c.totalCost, 0);
+    allCategories.forEach(c => {
+      c.percentOfQuote = totalCategoryCost > 0 ? (c.totalCost / totalCategoryCost) * 100 : 0;
+    });
+
+    return allCategories;
+  }, [preFilteredItems, minItemsPerCategory]);
 
   // Sorted category analysis
   const sortedCategoryAnalysis = useMemo(() => {
@@ -380,15 +389,16 @@ export default function CategoryView({ costViewData, currencySymbol, totalQuoteV
     if (categoryItems.length === 0) return null;
 
     const totalCost = categoryItems.reduce((sum, item) => sum + item.total_amount, 0);
+    const totalCategoryCost = categoryAnalysis.reduce((sum, c) => sum + c.totalCost, 0);
 
     return {
       category: selectedCategory,
       items: categoryItems.length,
       totalCost,
-      percentOfQuote: totalQuoteValue > 0 ? (totalCost / totalQuoteValue) * 100 : 0,
+      percentOfQuote: totalCategoryCost > 0 ? (totalCost / totalCategoryCost) * 100 : 0,
       avgCostPerItem: categoryItems.length > 0 ? totalCost / categoryItems.length : 0
     };
-  }, [filteredItems, selectedCategory, totalQuoteValue]);
+  }, [filteredItems, selectedCategory, categoryAnalysis]);
 
   // Pagination
   const totalPages = Math.ceil(

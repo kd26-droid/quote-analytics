@@ -859,7 +859,7 @@ export default function CostView({
               <p className="font-bold text-orange-800">Filters Active</p>
               <p className="text-sm text-orange-600">
                 Showing {filteredItems.length} of {items.length} items
-                {getBOMInstanceFilterText(bomInstances, selectedBOMInstances)}
+                {getBOMInstanceFilterText(selectedBOMInstances, bomInstances)}
                 {!selectedBOMs.includes('all') && ` • BOM: ${selectedBOMs.map(b => b.split(' > ').pop()).join(', ')}`}
                 {!selectedVendors.includes('all') && ` • Vendor: ${selectedVendors.map(vId => filters.vendor_list.find(v => v.vendor_id === vId)?.vendor_name || vId).join(', ')}`}
                 {!selectedTags.includes('all') && ` • Category: ${selectedTags.join(', ')}`}

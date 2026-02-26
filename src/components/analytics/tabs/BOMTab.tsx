@@ -126,6 +126,7 @@ export default function BOMTab({
         {selectedView === 'volume-analysis' && hasVolumeScenarios && costViewData && (
           <BOMVolumeAnalysisView
             costViewData={costViewData}
+            bomDetailData={bomDetailData}
             currencySymbol={currencySymbol}
             totalQuoteValue={totalQuoteValue}
             navigateToTab={navigateToTab}

@@ -155,6 +155,14 @@ export default function AdditionalCostsView({
 
   const allACTypes = useMemo(() => allACTypesWithInfo.map(t => t.name), [allACTypesWithInfo]);
 
+  // AC types shown as table columns — filtered by inclusion sub-filter
+  const displayedACTypes = useMemo(() => {
+    if (acInclusionFilter === 'all') return allACTypes;
+    return allACTypesWithInfo
+      .filter(t => acInclusionFilter === 'included' ? t.isCalculated : !t.isCalculated)
+      .map(t => t.name);
+  }, [allACTypesWithInfo, allACTypes, acInclusionFilter]);
+
   // Get unique BOMs with hierarchy
   const { uniqueBOMs, rootBOMCount } = useMemo(() => {
     const bomSet = new Set<string>();
@@ -1483,8 +1491,8 @@ export default function AdditionalCostsView({
                       )}
                     </th>
                   ))}
-                  {/* Dynamic AC Type columns */}
-                  {allACTypes.map(acType => {
+                  {/* Dynamic AC Type columns - filtered by inclusion sub-filter */}
+                  {displayedACTypes.map(acType => {
                     const metadata = getACMetadata(acType);
                     const tooltipParts = [acType, '━━━━━━━━━━━━━━━━━━'];
                     if (metadata) {
@@ -1612,8 +1620,8 @@ export default function AdditionalCostsView({
                         </td>
                       )}
 
-                      {/* Dynamic AC Type columns */}
-                      {allACTypes.map(acType => {
+                      {/* Dynamic AC Type columns - filtered by inclusion sub-filter */}
+                      {displayedACTypes.map(acType => {
                         const acValue = getACValue(item, acType);
                         const isInput = acValue && !acValue.isCalculated;
                         const displayValue = acValue

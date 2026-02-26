@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import * as React from 'react';
 import { Card, CardContent } from '../../../ui/card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import type { CostViewData, CostViewItem } from '../../../../services/api';
+import type { CostViewData, CostViewItem, BOMDetailData } from '../../../../services/api';
 import type { TabType, NavigationContext } from '../../QuoteAnalyticsDashboard';
 import { useBOMInstances } from '../../../../hooks/useBOMInstances';
 
@@ -10,6 +10,7 @@ const BOM_COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#06b6d4', '#84c
 
 interface BOMVolumeAnalysisViewProps {
   costViewData: CostViewData;
+  bomDetailData?: BOMDetailData | null;
   currencySymbol: string;
   totalQuoteValue: number;
   navigateToTab: (tab: TabType, context?: NavigationContext) => void;
@@ -34,6 +35,7 @@ const VIEW_OPTIONS: { value: BOMVolumeViewType; label: string; description: stri
 
 export default function BOMVolumeAnalysisView({
   costViewData,
+  bomDetailData,
   currencySymbol,
   totalQuoteValue,
   navigateToTab,
@@ -115,6 +117,24 @@ export default function BOMVolumeAnalysisView({
     return newSelection;
   };
 
+  // Build lookup: BOM instance entry_id → total BOM AC (sum across all hierarchy levels)
+  const bomACByInstance = useMemo(() => {
+    const map = new Map<string, { quoted: number; calculated: number }>();
+    if (bomDetailData?.bom_instances) {
+      bomDetailData.bom_instances.forEach(inst => {
+        // Sum BOM AC across ALL hierarchy levels (main + sub + sub-sub)
+        let totalQuoted = 0;
+        let totalCalc = 0;
+        inst.hierarchy.forEach(level => {
+          totalQuoted += level.total_bom_ac_quoted;
+          totalCalc += level.total_bom_ac_calculated;
+        });
+        map.set(inst.main_bom.entry_id, { quoted: totalQuoted, calculated: totalCalc });
+      });
+    }
+    return map;
+  }, [bomDetailData]);
+
   // Aggregate BOM-level data from items
   // Group by bom_code to find BOMs that appear in multiple instances with different quantities
   const bomVolumeData = useMemo(() => {
@@ -127,7 +147,8 @@ export default function BOMVolumeAnalysisView({
       bom_name: string;
       bom_instance_qty: number;
       items_subtotal: number;
-      total_ac: number;
+      total_item_ac: number;
+      bom_ac: number;
       total_cost: number;
       item_count: number;
     }>();
@@ -138,7 +159,7 @@ export default function BOMVolumeAnalysisView({
       const existing = instanceTotals.get(item.bom_instance_id);
       if (existing) {
         existing.items_subtotal += item.base_rate * item.quantity;
-        existing.total_ac += item.additional_cost_per_unit * item.quantity;
+        existing.total_item_ac += item.additional_cost_per_unit * item.quantity;
         existing.total_cost += item.total_amount;
         existing.item_count += 1;
       } else {
@@ -151,10 +172,20 @@ export default function BOMVolumeAnalysisView({
           bom_name: item.bom_name,
           bom_instance_qty: item.bom_instance_qty,
           items_subtotal: item.base_rate * item.quantity,
-          total_ac: item.additional_cost_per_unit * item.quantity,
+          total_item_ac: item.additional_cost_per_unit * item.quantity,
+          bom_ac: 0, // filled below
           total_cost: item.total_amount,
           item_count: 1
         });
+      }
+    });
+
+    // Add BOM-level AC from BOM Detail API to each instance
+    instanceTotals.forEach((inst) => {
+      const bomAC = bomACByInstance.get(inst.bom_instance_id);
+      if (bomAC) {
+        inst.bom_ac = bomAC.quoted;
+        inst.total_cost += bomAC.quoted; // Add BOM AC to total
       }
     });
 
@@ -196,17 +227,21 @@ export default function BOMVolumeAnalysisView({
         volumeBOMs.push({
           bom_code: bomCode,
           bom_name: sortedInstances[0].bom_name,
-          instances: sortedInstances.map(inst => ({
-            bom_instance_id: inst.bom_instance_id,
-            bom_instance_qty: inst.bom_instance_qty,
-            items_subtotal: inst.items_subtotal,
-            total_ac: inst.total_ac,
-            total_cost: inst.total_cost,
-            per_unit_items: inst.items_subtotal / inst.bom_instance_qty,
-            per_unit_ac: inst.total_ac / inst.bom_instance_qty,
-            per_unit_total: inst.total_cost / inst.bom_instance_qty,
-            item_count: inst.item_count
-          }))
+          instances: sortedInstances.map(inst => {
+            // total_ac = item-level AC + BOM-level AC
+            const totalAC = inst.total_item_ac + inst.bom_ac;
+            return {
+              bom_instance_id: inst.bom_instance_id,
+              bom_instance_qty: inst.bom_instance_qty,
+              items_subtotal: inst.items_subtotal,
+              total_ac: totalAC,
+              total_cost: inst.total_cost,
+              per_unit_items: inst.items_subtotal / inst.bom_instance_qty,
+              per_unit_ac: totalAC / inst.bom_instance_qty,
+              per_unit_total: inst.total_cost / inst.bom_instance_qty,
+              item_count: inst.item_count
+            };
+          })
         });
       }
     });

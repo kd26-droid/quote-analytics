@@ -177,8 +177,8 @@ export function BOMInstanceFilterPills({
  * Helper to get filter display text for BOM instances
  */
 export function getBOMInstanceFilterText(
-  bomInstances: BOMInstanceInfo[],
-  selectedInstances: string[]
+  selectedInstances: string[],
+  bomInstances: BOMInstanceInfo[]
 ): string {
   if (selectedInstances.includes('all')) return '';
 

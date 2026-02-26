@@ -441,20 +441,19 @@ export default function BOMComparisonView({
     return sortedNodes.slice(start, start + pageSize);
   }, [sortedNodes, currentPage, pageSize]);
 
-  // Key insights - sum only Main BOMs from ALL nodes (not filtered) for stable totals
+  // Key insights - sum ALL BOM levels (main + sub + sub-sub) for correct totals
   const insights = useMemo(() => {
-    // Always use allBOMNodes level 0 for stable totals
-    const allMainBOMs = allBOMNodes.filter(n => n.level === 0);
-    const totalItemsCost = allMainBOMs.reduce((sum, node) => sum + node.itemsSubtotal, 0);
+    // Sum across ALL BOM nodes — each node has its own costs (not inclusive of children)
+    const totalItemsCost = allBOMNodes.reduce((sum, node) => sum + node.itemsSubtotal, 0);
     // Quoted
-    const totalBOMCostQuoted = allMainBOMs.reduce((sum, node) => sum + node.totalCost, 0);
-    const totalBOMACQuoted = allMainBOMs.reduce((sum, node) => sum + node.bomAC, 0);
+    const totalBOMCostQuoted = allBOMNodes.reduce((sum, node) => sum + node.totalCost, 0);
+    const totalBOMACQuoted = allBOMNodes.reduce((sum, node) => sum + node.bomAC, 0);
     // Calculated
-    const totalBOMCostCalc = allMainBOMs.reduce((sum, node) => sum + node.totalCostCalc, 0);
-    const totalBOMACCalc = allMainBOMs.reduce((sum, node) => sum + node.bomACCalc, 0);
+    const totalBOMCostCalc = allBOMNodes.reduce((sum, node) => sum + node.totalCostCalc, 0);
+    const totalBOMACCalc = allBOMNodes.reduce((sum, node) => sum + node.bomACCalc, 0);
 
     // Count by level from allBOMNodes for stable counts
-    const mainBOMs = allMainBOMs.length;
+    const mainBOMs = allBOMNodes.filter(n => n.level === 0).length;
     const subBOMs = allBOMNodes.filter(n => n.level === 1).length;
     const subSubBOMs = allBOMNodes.filter(n => n.level >= 2).length;
 
