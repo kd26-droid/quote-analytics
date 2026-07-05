@@ -9,8 +9,8 @@ const getApiBaseUrl = (): string => {
 
     // Priority 2: api_env param (prod/dev)
     const apiEnv = urlParams.get('api_env');
-    if (apiEnv === 'prod') return 'https://qc9s5bz8d7.execute-api.us-east-1.amazonaws.com/prod';
-    if (apiEnv === 'dev') return 'https://poiigw0go0.execute-api.us-east-1.amazonaws.com/dev';
+    if (apiEnv === 'prod') return 'https://factwise-prod-apim-new.azure-api.net';
+    if (apiEnv === 'dev') return 'https://factwiserestapi.azure-api.net';
   }
   // Priority 3: Build-time env or localhost
   return (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
